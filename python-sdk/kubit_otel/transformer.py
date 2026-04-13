@@ -17,7 +17,7 @@ from typing import Any, Optional, Sequence
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 
-# ── OTel SpanKind → Langfuse observation type ────────────────────────────────
+# ── OTel SpanKind → Kubit observation type ──────────────────────────────────
 
 _SPAN_KIND_MAP = {
     SpanKind.INTERNAL: "SPAN",
@@ -27,7 +27,7 @@ _SPAN_KIND_MAP = {
     SpanKind.PRODUCER: "GENERATION",
 }
 
-# ── OTel StatusCode → Langfuse level ─────────────────────────────────────────
+# ── OTel StatusCode → Kubit level ───────────────────────────────────────────
 
 _STATUS_CODE_MAP = {
     StatusCode.UNSET: "DEFAULT",
@@ -89,8 +89,9 @@ def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, A
             else None
         )
 
-        session_id = resource_attrs.get(_RESOURCE_SESSION_ID)
-        user_id = resource_attrs.get(_RESOURCE_USER_ID)
+        # Span attrs take priority over resource attrs for per-request values
+        session_id = span_attrs.get(_RESOURCE_SESSION_ID) or resource_attrs.get(_RESOURCE_SESSION_ID)
+        user_id = span_attrs.get(_RESOURCE_USER_ID) or resource_attrs.get(_RESOURCE_USER_ID)
         service_version = resource_attrs.get(_RESOURCE_SERVICE_VERSION)
         deployment_env = resource_attrs.get(_RESOURCE_DEPLOYMENT_ENV)
 

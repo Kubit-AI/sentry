@@ -11,7 +11,6 @@ import {
   type PutRecordsRequestEntry,
 } from "@aws-sdk/client-kinesis";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { ExportResult, ExportResultCode } from "@opentelemetry/core";
 import {
   CredentialManager,
   DEFAULT_TOKEN_ENDPOINT,
@@ -46,14 +45,21 @@ export class KubitExporter {
 
   /**
    * Export a batch of spans to Kubit.
+   *
+   * Compatible with both OTel v1 (callback) and v2 (promise) SpanExporter
+   * interfaces. The runtime behaviour is identical — only the TypeScript
+   * structural types diverge between versions.
    */
   async export(
     spans: ReadableSpan[],
-    resultCallback: (result: ExportResult) => void
-  ): Promise<void> {
+    resultCallback?: (result: { code: number }) => void
+  ): Promise<{ code: number }> {
+    const SUCCESS = { code: 0 }; // ExportResultCode.SUCCESS
+    const FAILED = { code: 1 };  // ExportResultCode.FAILED
+
     if (spans.length === 0) {
-      resultCallback({ code: ExportResultCode.SUCCESS });
-      return;
+      resultCallback?.(SUCCESS);
+      return SUCCESS;
     }
 
     try {
@@ -76,8 +82,8 @@ export class KubitExporter {
       // Transform spans to Kubit JSON records
       const records = transformSpans(spans, identity.wid);
       if (records.length === 0) {
-        resultCallback({ code: ExportResultCode.SUCCESS });
-        return;
+        resultCallback?.(SUCCESS);
+        return SUCCESS;
       }
 
       // Serialise and send
@@ -89,10 +95,12 @@ export class KubitExporter {
         totalSent += await this.sendBatchWithRetry(batch, identity.streamName);
       }
 
-      resultCallback({ code: ExportResultCode.SUCCESS });
+      resultCallback?.(SUCCESS);
+      return SUCCESS;
     } catch (err) {
       console.error("[kubit-otel] Export failed:", (err as Error).message);
-      resultCallback({ code: ExportResultCode.FAILED });
+      resultCallback?.(FAILED);
+      return FAILED;
     }
   }
 

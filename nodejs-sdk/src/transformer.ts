@@ -91,8 +91,9 @@ export function transformSpans(
         ? hrtimeDiffMs(span.startTime, span.endTime)
         : null;
 
-    const sessionId = resourceAttrs[RESOURCE_SESSION_ID] as string | undefined;
-    const userId = resourceAttrs[RESOURCE_USER_ID] as string | undefined;
+    // Span attrs take priority over resource attrs for per-request values
+    const sessionId = (spanAttrs[RESOURCE_SESSION_ID] ?? resourceAttrs[RESOURCE_SESSION_ID]) as string | undefined;
+    const userId = (spanAttrs[RESOURCE_USER_ID] ?? resourceAttrs[RESOURCE_USER_ID]) as string | undefined;
     const serviceVersion = resourceAttrs[RESOURCE_SERVICE_VERSION] as
       | string
       | undefined;
