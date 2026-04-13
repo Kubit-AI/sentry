@@ -8,8 +8,8 @@ import {
   NodeTracerProvider,
   BatchSpanProcessor,
 } from "@opentelemetry/sdk-trace-node";
-import { KubitExporter } from "./exporter.js";
-import { DEFAULT_TOKEN_ENDPOINT } from "./credentials.js";
+import { KubitExporter } from "./exporter";
+import { DEFAULT_TOKEN_ENDPOINT } from "./credentials";
 
 export interface ConfigureOptions {
   /** Kubit API key (`rg.v1.<payload>.<sig>`). */

@@ -6,16 +6,16 @@
  *     configure({ apiKey: "rg.v1.xxx", serviceName: "my-app" });
  */
 
-export { KubitExporter, type KubitExporterConfig } from "./exporter.js";
+export { KubitExporter, type KubitExporterConfig } from "./exporter";
 export {
   KubitSpanProcessor,
   type KubitSpanProcessorConfig,
-} from "./processor.js";
-export { configure, type ConfigureOptions } from "./setup.js";
+} from "./processor";
+export { configure, type ConfigureOptions } from "./setup";
 export {
   CredentialManager,
   CredentialError,
   type KinesisCredentials,
   type WorkspaceIdentity,
-} from "./credentials.js";
-export { transformSpans, type KubitRecord } from "./transformer.js";
+} from "./credentials";
+export { transformSpans, type KubitRecord } from "./transformer";

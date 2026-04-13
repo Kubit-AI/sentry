@@ -15,8 +15,8 @@ import { ExportResult, ExportResultCode } from "@opentelemetry/core";
 import {
   CredentialManager,
   DEFAULT_TOKEN_ENDPOINT,
-} from "./credentials.js";
-import { transformSpans, type KubitRecord } from "./transformer.js";
+} from "./credentials";
+import { transformSpans, type KubitRecord } from "./transformer";
 
 /** Max records per PutRecords call. */
 const MAX_RECORDS_PER_CALL = 250;

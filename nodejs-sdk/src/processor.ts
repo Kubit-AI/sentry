@@ -12,7 +12,7 @@ import {
   BatchSpanProcessor,
   type BufferConfig,
 } from "@opentelemetry/sdk-trace-base";
-import { KubitExporter, type KubitExporterConfig } from "./exporter.js";
+import { KubitExporter, type KubitExporterConfig } from "./exporter";
 
 export interface KubitSpanProcessorConfig extends KubitExporterConfig {
   /** Maximum queue size (default: 2048). */
