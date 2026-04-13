@@ -51,17 +51,8 @@ const GENAI_ALL_KEYS = new Set([
 // Resource attribute names
 const RESOURCE_SESSION_ID = "session.id";
 const RESOURCE_USER_ID = "enduser.id";
-const RESOURCE_SERVICE_NAME = "service.name";
 const RESOURCE_SERVICE_VERSION = "service.version";
 const RESOURCE_DEPLOYMENT_ENV = "deployment.environment";
-
-const RESOURCE_WELL_KNOWN = new Set([
-  RESOURCE_SESSION_ID,
-  RESOURCE_USER_ID,
-  RESOURCE_SERVICE_NAME,
-  RESOURCE_SERVICE_VERSION,
-  RESOURCE_DEPLOYMENT_ENV,
-]);
 
 export interface KubitRecord {
   entity_type: string;
@@ -112,10 +103,7 @@ export function transformSpans(
     // ── Trace record (once per trace_id, from root span) ────────────────
     if (isRoot && !emittedTraces.has(traceId)) {
       emittedTraces.add(traceId);
-      const metadata: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(resourceAttrs)) {
-        if (!RESOURCE_WELL_KNOWN.has(k)) metadata[k] = v;
-      }
+      const metadata: Record<string, unknown> = { ...resourceAttrs };
 
       records.push({
         entity_type: "trace",

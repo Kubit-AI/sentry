@@ -54,17 +54,8 @@ _GENAI_ALL_KEYS = (
 # Resource attribute names
 _RESOURCE_SESSION_ID = "session.id"
 _RESOURCE_USER_ID = "enduser.id"
-_RESOURCE_SERVICE_NAME = "service.name"
 _RESOURCE_SERVICE_VERSION = "service.version"
 _RESOURCE_DEPLOYMENT_ENV = "deployment.environment"
-
-_RESOURCE_WELL_KNOWN = {
-    _RESOURCE_SESSION_ID,
-    _RESOURCE_USER_ID,
-    _RESOURCE_SERVICE_NAME,
-    _RESOURCE_SERVICE_VERSION,
-    _RESOURCE_DEPLOYMENT_ENV,
-}
 
 
 def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, Any]]:
@@ -102,12 +93,11 @@ def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, A
         user_id = resource_attrs.get(_RESOURCE_USER_ID)
         service_version = resource_attrs.get(_RESOURCE_SERVICE_VERSION)
         deployment_env = resource_attrs.get(_RESOURCE_DEPLOYMENT_ENV)
-        service_name = resource_attrs.get(_RESOURCE_SERVICE_NAME)
 
         # ── Trace record (once per trace_id, from root span) ─────────────
         if is_root and trace_id not in emitted_traces:
             emitted_traces.add(trace_id)
-            metadata = {k: v for k, v in resource_attrs.items() if k not in _RESOURCE_WELL_KNOWN}
+            metadata = dict(resource_attrs)
             records.append({
                 "entity_type": "trace",
                 "id": trace_id,
