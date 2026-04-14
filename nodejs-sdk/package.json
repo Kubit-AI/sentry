@@ -1,5 +1,5 @@
 {
-  "name": "@kubit/otel",
+  "name": "@kubit-ai/otel",
   "version": "0.1.0",
   "description": "OpenTelemetry exporter for Kubit analytics.",
   "main": "dist/index.js",

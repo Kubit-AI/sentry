@@ -8,6 +8,12 @@ const DEFAULT_TOKEN_ENDPOINT = "https://langfuse-ingest.kubit.ai/token";
 /** Refresh credentials 5 minutes before they expire. */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
+/** Timeout for token endpoint requests (10 seconds). */
+const FETCH_TIMEOUT_MS = 10_000;
+
+/** Minimum credential lifetime to accept (30 seconds). */
+const MIN_CREDENTIAL_LIFETIME_MS = 30_000;
+
 export interface KinesisCredentials {
   accessKeyId: string;
   secretAccessKey: string;
@@ -72,15 +78,22 @@ export class CredentialManager {
 
   private async refresh(): Promise<void> {
     let resp: Response;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       resp = await fetch(this.endpoint, {
         method: "POST",
         headers: { "x-api-key": this.apiKey },
+        signal: controller.signal,
       });
     } catch (err) {
-      throw new CredentialError(
-        `Token endpoint unreachable: ${(err as Error).message}`
-      );
+      const msg =
+        (err as Error).name === "AbortError"
+          ? `Token endpoint timed out after ${FETCH_TIMEOUT_MS}ms`
+          : `Token endpoint unreachable: ${(err as Error).message}`;
+      throw new CredentialError(msg);
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (resp.status === 401 || resp.status === 403) {
@@ -115,7 +128,8 @@ export class CredentialManager {
       throw new CredentialError("Token response missing partition_key (wid)");
     }
 
-    // Parse expiry
+    // Parse expiry — guard against negative/zero values from clock skew or
+    // already-expired tokens; fall back to 1 hour default.
     let msUntilExpiry = 3600_000; // default 1 hour
     try {
       if (expiryStr) {
@@ -123,6 +137,9 @@ export class CredentialManager {
           msUntilExpiry = expiryStr * 1000 - Date.now();
         } else {
           msUntilExpiry = new Date(expiryStr).getTime() - Date.now();
+        }
+        if (msUntilExpiry < MIN_CREDENTIAL_LIFETIME_MS) {
+          msUntilExpiry = 3600_000;
         }
       }
     } catch {
