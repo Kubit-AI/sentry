@@ -120,7 +120,11 @@ export class CredentialManager {
 
     const metadata = body.metadata ?? {};
     const wid: string = metadata.partition_key ?? "";
-    const streamName: string = metadata.stream_name ?? "langfuse-kubit-events";
+    const streamName: string = metadata.stream_name ?? "";
+
+    if (!streamName) {
+      throw new CredentialError("Token response missing stream_name");
+    }
     const region: string = metadata.region ?? "us-east-1";
     const expiryStr: string | number = metadata.expiry ?? "";
 
