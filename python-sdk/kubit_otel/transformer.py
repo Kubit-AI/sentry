@@ -58,7 +58,11 @@ _RESOURCE_SERVICE_VERSION = "service.version"
 _RESOURCE_DEPLOYMENT_ENV = "deployment.environment"
 
 
-def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, Any]]:
+def transform_spans(
+    spans: Sequence[ReadableSpan],
+    wid: str,
+    wid_claim: str,
+) -> list[dict[str, Any]]:
     """
     Transform a batch of ReadableSpan objects into Kubit JSON records.
 
@@ -67,6 +71,10 @@ def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, A
     records: list[dict[str, Any]] = []
     now_iso = _now_iso()
     emitted_traces: set[str] = set()
+
+    def _with_claim(rec: dict[str, Any]) -> dict[str, Any]:
+        rec["_wid_claim"] = wid_claim
+        return rec
 
     for span in spans:
         resource_attrs = dict(span.resource.attributes) if span.resource else {}
@@ -99,7 +107,7 @@ def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, A
         if is_root and trace_id not in emitted_traces:
             emitted_traces.add(trace_id)
             metadata = dict(resource_attrs)
-            records.append({
+            records.append(_with_claim({
                 "entity_type": "trace",
                 "id": trace_id,
                 "name": span.name,
@@ -121,7 +129,7 @@ def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, A
                 "created_at": now_iso,
                 "updated_at": now_iso,
                 "is_deleted": 0,
-            })
+            }))
 
         # ── Enriched observation record (every span) ─────────────────────
         model = _first_attr(span_attrs, _GENAI_MODEL_ATTRS)
@@ -150,7 +158,7 @@ def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, A
 
         metadata = {k: v for k, v in span_attrs.items() if k not in _GENAI_ALL_KEYS}
 
-        records.append({
+        records.append(_with_claim({
             "entity_type": "enriched_observation",
             "id": span_id,
             "trace_id": trace_id,
@@ -194,7 +202,7 @@ def transform_spans(spans: Sequence[ReadableSpan], wid: str) -> list[dict[str, A
             "created_at": now_iso,
             "updated_at": now_iso,
             "is_deleted": 0,
-        })
+        }))
 
     return records
 

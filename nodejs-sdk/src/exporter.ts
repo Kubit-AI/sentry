@@ -79,8 +79,7 @@ export class KubitExporter {
         this.currentAccessKey = creds.accessKeyId;
       }
 
-      // Transform spans to Kubit JSON records
-      const records = transformSpans(spans, identity.wid);
+      const records = transformSpans(spans, identity.wid, identity.widClaim);
       if (records.length === 0) {
         resultCallback?.(SUCCESS);
         return SUCCESS;

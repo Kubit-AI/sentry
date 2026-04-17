@@ -28,6 +28,7 @@ export interface WorkspaceIdentity {
   env: string;
   streamName: string;
   region: string;
+  widClaim: string;
 }
 
 export class CredentialError extends Error {
@@ -127,9 +128,13 @@ export class CredentialManager {
     }
     const region: string = metadata.region ?? "us-east-1";
     const expiryStr: string | number = metadata.expiry ?? "";
+    const widClaim: string = metadata.wid_claim ?? "";
 
     if (!wid) {
       throw new CredentialError("Token response missing partition_key (wid)");
+    }
+    if (!widClaim) {
+      throw new CredentialError("Token response missing wid_claim");
     }
 
     // Parse expiry — guard against negative/zero values from clock skew or
@@ -159,7 +164,7 @@ export class CredentialManager {
       expiry: Date.now() + msUntilExpiry,
     };
 
-    this._identity = { wid, org, env, streamName, region };
+    this._identity = { wid, org, env, streamName, region, widClaim };
   }
 
   private extractOrgEnv(): { org: string; env: string } {

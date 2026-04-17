@@ -68,11 +68,17 @@ export interface KubitRecord {
  */
 export function transformSpans(
   spans: ReadableSpan[],
-  wid: string
+  wid: string,
+  widClaim: string
 ): KubitRecord[] {
   const records: KubitRecord[] = [];
   const nowIso = nowIsoString();
   const emittedTraces = new Set<string>();
+
+  const withClaim = (rec: KubitRecord): KubitRecord => {
+    (rec as Record<string, unknown>)._wid_claim = widClaim;
+    return rec;
+  };
 
   for (const span of spans) {
     const resourceAttrs: Record<string, unknown> =
@@ -106,7 +112,7 @@ export function transformSpans(
       emittedTraces.add(traceId);
       const metadata: Record<string, unknown> = { ...resourceAttrs };
 
-      records.push({
+      records.push(withClaim({
         entity_type: "trace",
         id: traceId,
         name: span.name,
@@ -128,7 +134,7 @@ export function transformSpans(
         created_at: nowIso,
         updated_at: nowIso,
         is_deleted: 0,
-      });
+      }));
     }
 
     // ── Enriched observation record (every span) ────────────────────────
@@ -156,7 +162,7 @@ export function transformSpans(
       if (!GENAI_ALL_KEYS.has(k)) metadata[k] = v;
     }
 
-    records.push({
+    records.push(withClaim({
       entity_type: "enriched_observation",
       id: spanId,
       trace_id: traceId,
@@ -202,7 +208,7 @@ export function transformSpans(
       created_at: nowIso,
       updated_at: nowIso,
       is_deleted: 0,
-    });
+    }));
   }
 
   return records;

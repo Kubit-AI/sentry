@@ -42,6 +42,7 @@ class WorkspaceIdentity:
     env: str
     stream_name: str
     region: str
+    wid_claim: str
 
 
 class CredentialManager:
@@ -122,9 +123,12 @@ class CredentialManager:
         stream_name = metadata.get("stream_name", "")
         region = metadata.get("region", "")
         expiry_str = metadata.get("expiry", "")
+        wid_claim = metadata.get("wid_claim") or ""
 
         if not wid:
             raise CredentialError("Token response missing partition_key (wid)")
+        if not wid_claim:
+            raise CredentialError("Token response missing wid_claim")
 
         # Parse expiry — endpoint returns an ISO timestamp or epoch
         try:
@@ -159,6 +163,7 @@ class CredentialManager:
             env=env,
             stream_name=stream_name or "langfuse-kubit-events",
             region=region or "us-east-1",
+            wid_claim=wid_claim,
         )
 
         logger.info(

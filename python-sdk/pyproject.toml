@@ -6,8 +6,36 @@ build-backend = "setuptools.build_meta"
 name = "kubit-otel"
 version = "0.1.0"
 description = "OpenTelemetry exporter for Kubit analytics."
+readme = "README.md"
 requires-python = ">=3.9"
-license = "MIT"
+license = "LicenseRef-Kubit-Proprietary"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Kubit Inc", email = "support@kubit.ai" },
+]
+keywords = [
+    "opentelemetry",
+    "otel",
+    "kubit",
+    "kinesis",
+    "observability",
+    "llm-ops",
+    "analytics",
+    "genai",
+    "tracing",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
 
 dependencies = [
     "opentelemetry-api>=1.20.0",
@@ -23,6 +51,10 @@ dev = [
     "pytest-mock>=3.0",
     "moto[kinesis]>=4.0",
 ]
+
+[project.urls]
+Homepage = "https://www.kubit.ai"
+Documentation = "https://docs.kubit.ai"
 
 [tool.setuptools.packages.find]
 include = ["kubit_otel*"]

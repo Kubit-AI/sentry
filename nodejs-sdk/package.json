@@ -5,16 +5,34 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
+  "keywords": [
+    "opentelemetry",
+    "otel",
+    "kubit",
+    "kinesis",
+    "observability",
+    "llm-ops",
+    "analytics",
+    "genai",
+    "tracing"
+  ],
+  "author": {
+    "name": "Kubit Inc",
+    "url": "https://www.kubit.ai"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://www.kubit.ai",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest"
-  },
-  "license": "MIT",
-  "engines": {
-    "node": ">=18.0.0"
   },
   "dependencies": {
     "@aws-sdk/client-kinesis": "^3.500.0"

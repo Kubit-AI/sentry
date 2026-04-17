@@ -71,8 +71,7 @@ class KubitExporter(SpanExporter):
                 self._current_access_key = creds.access_key_id
                 logger.debug("Ingestion client refreshed with new credentials")
 
-            # Transform spans to Kubit JSON records
-            records = transform_spans(spans, identity.wid)
+            records = transform_spans(spans, identity.wid, identity.wid_claim)
             if not records:
                 return SpanExportResult.SUCCESS
 
