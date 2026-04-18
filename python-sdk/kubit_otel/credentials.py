@@ -17,7 +17,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TOKEN_ENDPOINT = "https://langfuse-ingest.kubit.ai/token"
+DEFAULT_TOKEN_ENDPOINT = "https://kubit-ingest.kubit.ai/token"
 
 # Refresh credentials 5 minutes before they expire
 _REFRESH_BUFFER_SECONDS = 300
@@ -161,7 +161,7 @@ class CredentialManager:
             wid=wid,
             org=org,
             env=env,
-            stream_name=stream_name or "langfuse-kubit-events",
+            stream_name=stream_name or "kubit-events",
             region=region or "us-east-1",
             wid_claim=wid_claim,
         )

@@ -3,7 +3,7 @@
  * credentials and auto-refreshes them before expiry.
  */
 
-const DEFAULT_TOKEN_ENDPOINT = "https://langfuse-ingest.kubit.ai/token";
+const DEFAULT_TOKEN_ENDPOINT = "https://kubit-ingest.kubit.ai/token";
 
 /** Refresh credentials 5 minutes before they expire. */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
