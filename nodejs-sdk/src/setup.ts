@@ -10,6 +10,7 @@ import {
 } from "@opentelemetry/sdk-trace-node";
 import { KubitExporter } from "./exporter";
 import { DEFAULT_TOKEN_ENDPOINT } from "./credentials";
+import { logger, redactEndpoint } from "./logger";
 
 export interface ConfigureOptions {
   /** Kubit API key (`rg.v1.<payload>.<sig>`). */
@@ -39,8 +40,11 @@ export interface ConfigureOptions {
  * @returns The configured NodeTracerProvider (also registered as global provider).
  */
 export function configure(options: ConfigureOptions): NodeTracerProvider {
+  const serviceName = options.serviceName ?? "default";
+  const tokenEndpoint = options.tokenEndpoint ?? DEFAULT_TOKEN_ENDPOINT;
+
   const attrs: Record<string, string> = {
-    "service.name": options.serviceName ?? "default",
+    "service.name": serviceName,
   };
 
   if (options.serviceVersion) {
@@ -55,11 +59,17 @@ export function configure(options: ConfigureOptions): NodeTracerProvider {
 
   const exporter = new KubitExporter({
     apiKey: options.apiKey,
-    tokenEndpoint: options.tokenEndpoint ?? DEFAULT_TOKEN_ENDPOINT,
+    tokenEndpoint,
   });
 
   provider.addSpanProcessor(new BatchSpanProcessor(exporter));
   provider.register();
+
+  logger.info(
+    `kubit_otel configured  service_name=${serviceName} ` +
+      `service_version=${options.serviceVersion ?? "-"} ` +
+      `token_host=${redactEndpoint(tokenEndpoint)}`
+  );
 
   return provider;
 }

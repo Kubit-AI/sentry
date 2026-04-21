@@ -9,6 +9,7 @@ KubitSpanProcessor — drop-in OTel SpanProcessor for Kubit analytics.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from opentelemetry.context import Context
@@ -17,6 +18,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from kubit_otel.exporter import KubitExporter
 from kubit_otel.credentials import DEFAULT_TOKEN_ENDPOINT
+
+logger = logging.getLogger(__name__)
 
 
 class KubitSpanProcessor(BatchSpanProcessor):
@@ -75,3 +78,20 @@ class KubitSpanProcessor(BatchSpanProcessor):
             max_export_batch_size=max_export_batch_size,
             export_timeout_millis=export_timeout_millis,
         )
+        logger.debug(
+            "KubitSpanProcessor initialised  max_queue_size=%d "
+            "schedule_delay_millis=%.0f max_export_batch_size=%d "
+            "export_timeout_millis=%.0f",
+            max_queue_size, schedule_delay_millis,
+            max_export_batch_size, export_timeout_millis,
+        )
+
+    def shutdown(self) -> None:  # type: ignore[override]
+        logger.debug("KubitSpanProcessor shutdown")
+        super().shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:  # type: ignore[override]
+        logger.debug(
+            "KubitSpanProcessor force_flush  timeout_ms=%d", timeout_millis,
+        )
+        return super().force_flush(timeout_millis)

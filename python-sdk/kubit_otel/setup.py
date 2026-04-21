@@ -4,7 +4,9 @@ Convenience setup — one-liner to configure OTel with Kubit exporter.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -13,6 +15,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from kubit_otel.exporter import KubitExporter
 from kubit_otel.credentials import DEFAULT_TOKEN_ENDPOINT
+
+logger = logging.getLogger(__name__)
 
 
 def configure(
@@ -61,9 +65,27 @@ def configure(
     resource = Resource.create(attrs)
     provider = TracerProvider(resource=resource)
 
-    exporter = KubitExporter(api_key=api_key, token_endpoint=token_endpoint)
+    exporter = KubitExporter(
+        api_key=api_key,
+        token_endpoint=token_endpoint,
+    )
     provider.add_span_processor(BatchSpanProcessor(exporter))
 
     trace.set_tracer_provider(provider)  # type: ignore[arg-type]
+
+    token_host = "<unparseable>"
+    try:
+        parsed = urlparse(token_endpoint)
+        if parsed.scheme and parsed.netloc:
+            token_host = f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+
+    logger.info(
+        "kubit_otel configured  service_name=%s service_version=%s token_host=%s",
+        service_name,
+        service_version or "-",
+        token_host,
+    )
 
     return provider

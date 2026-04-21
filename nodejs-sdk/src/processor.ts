@@ -13,6 +13,7 @@ import {
   type BufferConfig,
 } from "@opentelemetry/sdk-trace-base";
 import { KubitExporter, type KubitExporterConfig } from "./exporter";
+import { logger } from "./logger";
 
 export interface KubitSpanProcessorConfig extends KubitExporterConfig {
   /** Maximum queue size (default: 2048). */
@@ -40,5 +41,22 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
     };
 
     super(exporter, bufferConfig);
+
+    logger.debug(
+      `KubitSpanProcessor initialised  maxQueueSize=${bufferConfig.maxQueueSize} ` +
+        `scheduledDelayMillis=${bufferConfig.scheduledDelayMillis} ` +
+        `maxExportBatchSize=${bufferConfig.maxExportBatchSize} ` +
+        `exportTimeoutMillis=${bufferConfig.exportTimeoutMillis}`
+    );
+  }
+
+  async shutdown(): Promise<void> {
+    logger.debug("KubitSpanProcessor shutdown");
+    return super.shutdown();
+  }
+
+  async forceFlush(): Promise<void> {
+    logger.debug("KubitSpanProcessor forceFlush");
+    return super.forceFlush();
   }
 }

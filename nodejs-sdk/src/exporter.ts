@@ -15,6 +15,7 @@ import {
   CredentialManager,
   DEFAULT_TOKEN_ENDPOINT,
 } from "./credentials";
+import { logger } from "./logger";
 import { transformSpans, type KubitRecord } from "./transformer";
 
 /** Max records per PutRecords call. */
@@ -37,10 +38,9 @@ export class KubitExporter {
   private currentAccessKey: string | null = null;
 
   constructor(config: KubitExporterConfig) {
-    this.credManager = new CredentialManager(
-      config.apiKey,
-      config.tokenEndpoint ?? DEFAULT_TOKEN_ENDPOINT
-    );
+    const endpoint = config.tokenEndpoint ?? DEFAULT_TOKEN_ENDPOINT;
+    this.credManager = new CredentialManager(config.apiKey, endpoint);
+    logger.debug(`KubitExporter initialised  token_endpoint=${endpoint}`);
   }
 
   /**
@@ -62,7 +62,9 @@ export class KubitExporter {
       return SUCCESS;
     }
 
+    const started = Date.now();
     try {
+      logger.debug(`export start  spans=${spans.length}`);
       const identity = await this.credManager.getIdentity();
       const creds = await this.credManager.getCredentials();
 
@@ -77,10 +79,14 @@ export class KubitExporter {
           },
         });
         this.currentAccessKey = creds.accessKeyId;
+        logger.debug(
+          `Ingestion client refreshed  region=${identity.region} stream=${identity.streamName}`
+        );
       }
 
       const records = transformSpans(spans, identity.wid, identity.widClaim);
       if (records.length === 0) {
+        logger.debug(`no records produced from batch  spans=${spans.length}`);
         resultCallback?.(SUCCESS);
         return SUCCESS;
       }
@@ -88,27 +94,47 @@ export class KubitExporter {
       // Serialise and send
       const entries = this.serialise(records, identity.wid);
       const batches = this.splitBatches(entries);
+      const totalBytes = batches.reduce(
+        (sum, b) => sum + b.reduce((s, e) => s + (e.Data as Buffer).length, 0),
+        0
+      );
+      logger.debug(
+        `batch split  records=${entries.length} batches=${batches.length} bytes=${totalBytes}`
+      );
 
       let totalSent = 0;
-      for (const batch of batches) {
+      for (let idx = 0; idx < batches.length; idx++) {
+        const batch = batches[idx];
+        logger.debug(
+          `sending batch ${idx + 1}/${batches.length}  records=${batch.length}`
+        );
         totalSent += await this.sendBatchWithRetry(batch, identity.streamName);
       }
+
+      const durationMs = Date.now() - started;
+      logger.info(
+        `export complete  wid=${identity.wid} spans=${spans.length} ` +
+          `records=${records.length} sent=${totalSent} bytes=${totalBytes} ` +
+          `batches=${batches.length} duration_ms=${durationMs}`
+      );
 
       resultCallback?.(SUCCESS);
       return SUCCESS;
     } catch (err) {
-      console.error("[kubit-otel] Export failed:", (err as Error).message);
+      logger.error(`export failed: ${(err as Error).message}`);
       resultCallback?.(FAILED);
       return FAILED;
     }
   }
 
   async shutdown(): Promise<void> {
+    logger.debug("KubitExporter shutdown");
     this.client?.destroy();
     this.client = null;
   }
 
   async forceFlush(): Promise<void> {
+    logger.debug("forceFlush called");
     // Nothing to flush — export() is async but self-contained.
   }
 
@@ -123,8 +149,8 @@ export class KubitExporter {
     for (const rec of records) {
       const data = Buffer.from(JSON.stringify(rec), "utf-8");
       if (data.length > MAX_RECORD_BYTES) {
-        console.warn(
-          `[kubit-otel] Record ${rec.id} exceeds 1 MB (${data.length} bytes), skipping`
+        logger.warn(
+          `record ${rec.id} exceeds 1 MB (${data.length} bytes), skipping`
         );
         continue;
       }
@@ -181,6 +207,9 @@ export class KubitExporter {
       if (pending.length === 0) break;
 
       try {
+        logger.debug(
+          `put_records  attempt=${attempt + 1}/${MAX_RETRIES + 1} pending=${pending.length} stream=${streamName}`
+        );
         const result = await this.client!.send(
           new PutRecordsCommand({
             StreamName: streamName,
@@ -198,21 +227,24 @@ export class KubitExporter {
           .map((rec, i) => (rec.ErrorCode ? pending[i] : null))
           .filter((r): r is PutRecordsRequestEntry => r !== null);
 
-        console.warn(
-          `[kubit-otel] Partial failure: ${failedCount}/${pending.length} failed (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        logger.warn(
+          `put_records partial failure  failed=${failedCount}/${pending.length} attempt=${attempt + 1}/${MAX_RETRIES + 1}`
         );
         pending = failedRecords;
 
         if (attempt < MAX_RETRIES) {
-          await sleep(2 ** attempt * 1000);
+          const delayMs = 2 ** attempt * 1000;
+          logger.debug(`retry sleep  delay_ms=${delayMs}`);
+          await sleep(delayMs);
         }
       } catch (err) {
-        console.error(
-          `[kubit-otel] PutRecords failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
-          (err as Error).message
+        logger.error(
+          `put_records failed  attempt=${attempt + 1}/${MAX_RETRIES + 1}: ${(err as Error).message}`
         );
         if (attempt < MAX_RETRIES) {
-          await sleep(2 ** attempt * 1000);
+          const delayMs = 2 ** attempt * 1000;
+          logger.debug(`retry sleep  delay_ms=${delayMs}`);
+          await sleep(delayMs);
           continue;
         }
         throw err;

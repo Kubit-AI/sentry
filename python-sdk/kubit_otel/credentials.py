@@ -64,6 +64,10 @@ class CredentialManager:
         self._credentials: Optional[KinesisCredentials] = None
         self._identity: Optional[WorkspaceIdentity] = None
         self._client = httpx.Client(timeout=10.0)
+        logger.debug(
+            "CredentialManager initialised  endpoint=%s",
+            _redact_endpoint(token_endpoint),
+        )
 
     @property
     def identity(self) -> WorkspaceIdentity:
@@ -80,29 +84,61 @@ class CredentialManager:
         return self._credentials
 
     def close(self) -> None:
+        logger.debug("CredentialManager closing http client")
         self._client.close()
 
     def _ensure_valid(self) -> None:
         """Refresh credentials if missing or about to expire."""
         with self._lock:
-            if self._credentials and self._credentials.expiry - time.monotonic() > _REFRESH_BUFFER_SECONDS:
-                return
+            if self._credentials:
+                remaining = self._credentials.expiry - time.monotonic()
+                if remaining > _REFRESH_BUFFER_SECONDS:
+                    logger.debug(
+                        "credentials valid  remaining_s=%.0f buffer_s=%d",
+                        remaining, _REFRESH_BUFFER_SECONDS,
+                    )
+                    return
+                logger.debug(
+                    "credentials nearing expiry — refreshing  remaining_s=%.0f",
+                    remaining,
+                )
+            else:
+                logger.debug("no credentials yet — fetching initial token")
             self._refresh()
 
     def _refresh(self) -> None:
         """Call the token endpoint to get fresh credentials."""
+        started = time.monotonic()
         try:
+            logger.debug(
+                "POST token endpoint  endpoint=%s",
+                _redact_endpoint(self._endpoint),
+            )
             resp = self._client.post(
                 self._endpoint,
                 headers={"x-api-key": self._api_key},
             )
         except httpx.HTTPError as exc:
+            logger.error("token endpoint unreachable: %s", exc)
             raise CredentialError(f"Token endpoint unreachable: {exc}") from exc
 
+        duration_ms = (time.monotonic() - started) * 1000
+        logger.debug(
+            "token response  status=%d duration_ms=%.1f",
+            resp.status_code, duration_ms,
+        )
+
         if resp.status_code == 401 or resp.status_code == 403:
+            logger.error(
+                "token endpoint rejected api key  status=%d", resp.status_code,
+            )
             raise CredentialError(f"Invalid API key (HTTP {resp.status_code})")
 
         if resp.status_code != 200:
+            logger.error(
+                "token endpoint returned non-200  status=%d body_preview=%s",
+                resp.status_code, resp.text[:200],
+            )
             raise CredentialError(
                 f"Token endpoint returned {resp.status_code}: {resp.text[:200]}"
             )
@@ -167,10 +203,15 @@ class CredentialManager:
         )
 
         logger.info(
-            "Credentials refreshed  wid=%s org=%s env=%s stream=%s region=%s expires_in=%ds",
+            "credentials refreshed  wid=%s org=%s env=%s stream=%s region=%s expires_in=%ds",
             wid, org, env, self._identity.stream_name, self._identity.region,
             int(seconds_until_expiry),
         )
+        if seconds_until_expiry < _REFRESH_BUFFER_SECONDS * 2:
+            logger.warning(
+                "credentials short-lived  expires_in=%ds buffer_s=%d",
+                int(seconds_until_expiry), _REFRESH_BUFFER_SECONDS,
+            )
 
     def _extract_org_env(self) -> tuple[str, str]:
         """Extract org and env from the API key payload segment."""
@@ -194,3 +235,18 @@ class CredentialManager:
 
 class CredentialError(Exception):
     """Raised when credential exchange fails."""
+
+
+def _redact_endpoint(url: str) -> str:
+    """
+    Return the scheme+host of an endpoint URL, stripping path/query.
+    Used in log output so URLs with path-embedded secrets don't leak.
+    """
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    return "<redacted>"

@@ -3,6 +3,8 @@
  * credentials and auto-refreshes them before expiry.
  */
 
+import { logger, redactEndpoint } from "./logger";
+
 const DEFAULT_TOKEN_ENDPOINT = "https://kubit-ingest.kubit.ai/token";
 
 /** Refresh credentials 5 minutes before they expire. */
@@ -48,6 +50,9 @@ export class CredentialManager {
   constructor(apiKey: string, tokenEndpoint: string = DEFAULT_TOKEN_ENDPOINT) {
     this.apiKey = apiKey;
     this.endpoint = tokenEndpoint;
+    logger.debug(
+      `CredentialManager initialised  endpoint=${redactEndpoint(tokenEndpoint)}`
+    );
   }
 
   async getIdentity(): Promise<WorkspaceIdentity> {
@@ -61,11 +66,19 @@ export class CredentialManager {
   }
 
   private async ensureValid(): Promise<void> {
-    if (
-      this.credentials &&
-      this.credentials.expiry - Date.now() > REFRESH_BUFFER_MS
-    ) {
-      return;
+    if (this.credentials) {
+      const remainingMs = this.credentials.expiry - Date.now();
+      if (remainingMs > REFRESH_BUFFER_MS) {
+        logger.debug(
+          `credentials valid  remaining_s=${Math.round(remainingMs / 1000)} buffer_s=${Math.round(REFRESH_BUFFER_MS / 1000)}`
+        );
+        return;
+      }
+      logger.debug(
+        `credentials nearing expiry — refreshing  remaining_s=${Math.round(remainingMs / 1000)}`
+      );
+    } else {
+      logger.debug("no credentials yet — fetching initial token");
     }
 
     // Deduplicate concurrent refresh calls
@@ -78,10 +91,14 @@ export class CredentialManager {
   }
 
   private async refresh(): Promise<void> {
+    const started = Date.now();
     let resp: Response;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
+      logger.debug(
+        `POST token endpoint  endpoint=${redactEndpoint(this.endpoint)}`
+      );
       resp = await fetch(this.endpoint, {
         method: "POST",
         headers: { "x-api-key": this.apiKey },
@@ -92,17 +109,27 @@ export class CredentialManager {
         (err as Error).name === "AbortError"
           ? `Token endpoint timed out after ${FETCH_TIMEOUT_MS}ms`
           : `Token endpoint unreachable: ${(err as Error).message}`;
+      logger.error(msg);
       throw new CredentialError(msg);
     } finally {
       clearTimeout(timeoutId);
     }
 
+    const durationMs = Date.now() - started;
+    logger.debug(
+      `token response  status=${resp.status} duration_ms=${durationMs}`
+    );
+
     if (resp.status === 401 || resp.status === 403) {
+      logger.error(`token endpoint rejected api key  status=${resp.status}`);
       throw new CredentialError(`Invalid API key (HTTP ${resp.status})`);
     }
 
     if (resp.status !== 200) {
       const text = await resp.text();
+      logger.error(
+        `token endpoint returned non-200  status=${resp.status} body_preview=${text.slice(0, 200)}`
+      );
       throw new CredentialError(
         `Token endpoint returned ${resp.status}: ${text.slice(0, 200)}`
       );
@@ -165,6 +192,16 @@ export class CredentialManager {
     };
 
     this._identity = { wid, org, env, streamName, region, widClaim };
+
+    const expiresInS = Math.round(msUntilExpiry / 1000);
+    logger.info(
+      `credentials refreshed  wid=${wid} org=${org} env=${env} stream=${streamName} region=${region} expires_in=${expiresInS}s`
+    );
+    if (msUntilExpiry < REFRESH_BUFFER_MS * 2) {
+      logger.warn(
+        `credentials short-lived  expires_in=${expiresInS}s buffer_s=${Math.round(REFRESH_BUFFER_MS / 1000)}`
+      );
+    }
   }
 
   private extractOrgEnv(): { org: string; env: string } {
