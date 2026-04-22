@@ -14,7 +14,12 @@ export {
   KubitSpanProcessor,
   type KubitSpanProcessorConfig,
 } from "./processor";
-export { configure, type ConfigureOptions } from "./setup";
+export {
+  attach,
+  configure,
+  type AttachOptions,
+  type ConfigureOptions,
+} from "./setup";
 export {
   CredentialManager,
   CredentialError,
@@ -22,3 +27,13 @@ export {
   type WorkspaceIdentity,
 } from "./credentials";
 export { transformSpans, type KubitRecord } from "./transformer";
+export {
+  KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES,
+  KUBIT_TRACER_NAME,
+  getInstrumentationScopeName,
+  isDefaultExportSpan,
+  isGenAISpan,
+  isKnownLLMInstrumentor,
+  isKubitSpan,
+  type ShouldExportSpan,
+} from "./spanFilter";

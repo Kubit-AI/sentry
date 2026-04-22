@@ -11,17 +11,11 @@ npm install @kubit-ai/otel
 ## Quick start
 
 ```ts
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { KubitExporter } from "@kubit-ai/otel";
-
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(
-  new BatchSpanProcessor(new KubitExporter({ apiKey: "rg.v1.xxx" })),
-);
-provider.register();
-
+import { configure } from "@kubit-ai/otel";
 import { trace } from "@opentelemetry/api";
+
+configure({ apiKey: "rg.v1.xxx", serviceName: "my-app" });
+
 const tracer = trace.getTracer("my-app");
 
 tracer.startActiveSpan("chat.completion", (span) => {
@@ -34,10 +28,33 @@ tracer.startActiveSpan("chat.completion", (span) => {
 });
 ```
 
-Spans are exported to Kubit with standard OpenTelemetry GenAI semantic
-conventions. Root spans become traces, child spans become enriched
-observations. `gen_ai.*` attributes are extracted into dedicated columns
-for model name, prompt/completion, token counts, and cost.
+Spans are exported to Kubit using standard OpenTelemetry GenAI semantic
+conventions. Each trace's root span is recorded as the trace; every span
+(including the root) is recorded as an observation under it. `gen_ai.*`
+attributes are mapped to first-class, queryable fields for model name,
+prompt/completion, token counts, and cost.
+
+For finer-grained control you can compose `KubitSpanProcessor` or the raw
+`KubitExporter` with your own `TracerProvider` / `BatchSpanProcessor`
+instead of calling `configure()`.
+
+### Works alongside other OTel-based SDKs
+
+`configure()` detects whether a real `TracerProvider` is already installed
+as the global OTel provider. If so, it attaches `KubitSpanProcessor` to
+that provider and merges in your resource attributes — it does **not**
+replace the existing provider. You can call `configure()` before or after
+other OTel-based libraries (Langfuse, OpenLLMetry, an OTel distro, …) and
+every span will reach both sinks.
+
+If you want explicit "attach only, never register" behavior, use `attach()`:
+
+```ts
+import { attach } from "@kubit-ai/otel";
+
+// Must be called after another library has installed a real provider.
+attach({ apiKey: "rg.v1.xxx" });
+```
 
 ## Supported attributes
 
@@ -51,6 +68,48 @@ for model name, prompt/completion, token counts, and cost.
 | `gen_ai.usage.cost` | Total cost (USD) |
 | `session.id` | Conversation session id |
 | `enduser.id` | End-user id |
+
+## Span filtering
+
+By default, only LLM-relevant spans are forwarded to Kubit. A span is exported if it:
+
+- was created by the Kubit SDK tracer (`kubit-sdk`),
+- carries any `gen_ai.*` semantic-convention attribute, or
+- comes from a known LLM instrumentation scope (OpenInference, LangSmith, LiteLLM, Vercel AI SDK, OpenLLMetry/Traceloop, Braintrust, Logfire, …).
+
+This keeps HTTP/DB/framework auto-instrumentation noise out of your Kubit workspace without extra configuration. Filtering lives on `KubitSpanProcessor`; bare `KubitExporter` consumers can apply the helpers manually.
+
+### Extend the default filter
+
+```ts
+import {
+  KubitSpanProcessor,
+  isDefaultExportSpan,
+  getInstrumentationScopeName,
+} from "@kubit-ai/otel";
+
+new KubitSpanProcessor({
+  apiKey: "rg.v1.xxx",
+  shouldExportSpan: ({ otelSpan }) =>
+    isDefaultExportSpan(otelSpan) ||
+    (getInstrumentationScopeName(otelSpan)?.startsWith("my-framework") ?? false),
+});
+```
+
+### Full override
+
+```ts
+new KubitSpanProcessor({
+  apiKey: "rg.v1.xxx",
+  shouldExportSpan: ({ otelSpan }) => otelSpan.name.startsWith("llm."),
+});
+```
+
+### Export everything
+
+```ts
+new KubitSpanProcessor({ apiKey: "rg.v1.xxx", shouldExportSpan: () => true });
+```
 
 ## Node compatibility
 

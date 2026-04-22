@@ -31,11 +31,28 @@ _install_env_log_level()
 
 from kubit_otel.exporter import KubitExporter
 from kubit_otel.processor import KubitSpanProcessor
-from kubit_otel.setup import configure
+from kubit_otel.setup import attach, configure
+from kubit_otel.span_filter import (
+    KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES,
+    KUBIT_TRACER_NAME,
+    ShouldExportSpan,
+    is_default_export_span,
+    is_genai_span,
+    is_known_llm_instrumentor,
+    is_kubit_span,
+)
 
 __all__ = [
     "KubitExporter",
     "KubitSpanProcessor",
+    "attach",
     "configure",
+    "KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES",
+    "KUBIT_TRACER_NAME",
+    "ShouldExportSpan",
+    "is_default_export_span",
+    "is_genai_span",
+    "is_known_llm_instrumentor",
+    "is_kubit_span",
 ]
-__version__ = "0.3.0"
+__version__ = "0.4.0"

@@ -1,0 +1,103 @@
+"""Langfuse SDK v3/v4 attribute mappings.
+
+Langfuse serialises ``usage_details`` and ``cost_details`` as single JSON
+strings. Model parameters likewise arrive as a JSON blob under either
+``langfuse.observation.model.parameters`` (v4) or ``langfuse.observation.model_parameters``
+(v3). Trace- and observation-level metadata are exposed via dotted prefixes
+and can be promoted to first-level metadata keys.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..helpers import clean_discriminator, merge_json_blob
+
+NAME = "langfuse"
+
+MODEL_ATTRS = (
+    "langfuse.observation.model.name",  # v4
+    "langfuse.observation.model",       # v3
+)
+PROVIDED_MODEL_ATTRS = ("langfuse.observation.provided_model_name",)
+
+INPUT_ATTRS = ("langfuse.observation.input",)
+OUTPUT_ATTRS = ("langfuse.observation.output",)
+
+INPUT_TOKENS_ATTRS = ("langfuse.observation.usage_details.input",)
+OUTPUT_TOKENS_ATTRS = ("langfuse.observation.usage_details.output",)
+TOTAL_TOKENS_ATTRS = ("langfuse.observation.usage_details.total",)
+
+INPUT_COST_ATTRS = ("langfuse.observation.cost_details.input",)
+OUTPUT_COST_ATTRS = ("langfuse.observation.cost_details.output",)
+TOTAL_COST_ATTRS = (
+    "langfuse.observation.cost_details.total",
+    "langfuse.observation.total_cost",
+)
+
+SESSION_ID_ATTRS = ("langfuse.session.id",)
+USER_ID_ATTRS = ("langfuse.user.id",)
+TAGS_ATTRS = ("langfuse.trace.tags",)
+
+TIME_TO_FIRST_TOKEN_ATTRS: tuple[str, ...] = ()
+TOOL_CALLS_ATTRS = ("langfuse.observation.tool_calls",)
+TOOL_CALL_NAMES_ATTRS = ("langfuse.observation.tool_call_names",)
+TOOL_DEFINITIONS_ATTRS = ("langfuse.observation.tool_definitions",)
+PROVIDER_ATTRS: tuple[str, ...] = ()
+AGENT_NAME_ATTRS: tuple[str, ...] = ()
+AGENT_ID_ATTRS: tuple[str, ...] = ()
+AGENT_VERSION_ATTRS: tuple[str, ...] = ()
+TOOL_NAME_ATTRS: tuple[str, ...] = ()
+SYSTEM_INSTRUCTIONS_ATTRS: tuple[str, ...] = ()
+
+# Langfuse-specific extras (first-match string fallbacks).
+COMPLETION_START_ATTRS = ("langfuse.observation.completion_start_time",)
+PROMPT_ID_ATTRS = ("langfuse.observation.prompt_id",)
+PROMPT_NAME_ATTRS = ("langfuse.observation.prompt_name", "langfuse.prompt.name")
+PROMPT_VERSION_ATTRS = ("langfuse.observation.prompt_version", "langfuse.prompt.version")
+
+CACHE_TOKEN_MAP: tuple[tuple[str, str], ...] = ()
+
+# Params arrive as JSON blobs. v4 preferred, v3 legacy.
+PARAMS_BLOB_ATTRS = (
+    "langfuse.observation.model.parameters",
+    "langfuse.observation.model_parameters",
+)
+FLAT_PARAM_ATTRS: tuple[str, ...] = ()
+
+_USAGE_BLOB_ATTR = "langfuse.observation.usage_details"
+_COST_BLOB_ATTR = "langfuse.observation.cost_details"
+_OBSERVATION_TYPE_ATTR = "langfuse.observation.type"
+
+_METADATA_PREFIXES = (
+    "langfuse.trace.metadata.",
+    "langfuse.observation.metadata.",
+)
+
+
+def resolve_observation_type(span_attrs: dict) -> str | None:
+    lf = clean_discriminator(span_attrs.get(_OBSERVATION_TYPE_ATTR))
+    if not lf:
+        return None
+    if lf == "generation":
+        return "GENERATION"
+    return lf.upper()
+
+
+def parse_usage_blobs(span_attrs: dict, usage_details: dict[str, Any]) -> None:
+    merge_json_blob(span_attrs.get(_USAGE_BLOB_ATTR), usage_details)
+
+
+def parse_cost_blobs(span_attrs: dict, cost_details: dict[str, Any]) -> None:
+    merge_json_blob(span_attrs.get(_COST_BLOB_ATTR), cost_details)
+
+
+def enrich_metadata(span_attrs: dict, metadata: dict[str, Any]) -> None:
+    """Promote ``langfuse.{trace,observation}.metadata.*`` to first-level keys."""
+    for key, value in span_attrs.items():
+        if not isinstance(key, str):
+            continue
+        for prefix in _METADATA_PREFIXES:
+            if key.startswith(prefix):
+                metadata.setdefault(key[len(prefix):], value)
+                break

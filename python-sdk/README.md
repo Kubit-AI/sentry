@@ -25,10 +25,30 @@ with tracer.start_as_current_span("chat.completion") as span:
     span.set_attribute("gen_ai.usage.output_tokens", 5)
 ```
 
-Spans are exported to Kubit with standard OpenTelemetry GenAI semantic
-conventions. Root spans become traces, child spans become enriched
-observations. `gen_ai.*` attributes are extracted into dedicated columns
-for model name, prompt/completion, token counts, and cost.
+Spans are exported to Kubit using standard OpenTelemetry GenAI semantic
+conventions. Each trace's root span is recorded as the trace; every span
+(including the root) is recorded as an observation under it. `gen_ai.*`
+attributes are mapped to first-class, queryable fields for model name,
+prompt/completion, token counts, and cost.
+
+### Works alongside other OTel-based SDKs
+
+`configure()` detects whether a real `TracerProvider` is already installed
+as the global OTel provider. If so, it attaches `KubitSpanProcessor` to
+that provider and merges in your resource attributes — it does **not**
+replace the existing provider. You can call `configure()` before or after
+other OTel-based libraries (Langfuse, OpenLLMetry, an OTel distro, …) and
+every span will reach both sinks.
+
+If you want explicit "attach only, never register" behavior, use
+`attach()`:
+
+```python
+from kubit_otel import attach
+
+# Must be called after another library has installed a real provider.
+attach(api_key="rg.v1.xxx")
+```
 
 ## Supported attributes
 
@@ -42,6 +62,48 @@ for model name, prompt/completion, token counts, and cost.
 | `gen_ai.usage.cost` | Total cost (USD) |
 | `session.id` | Conversation session id |
 | `enduser.id` | End-user id |
+
+## Span filtering
+
+By default, only LLM-relevant spans are forwarded to Kubit. A span is exported if it:
+
+- was created by the Kubit SDK tracer (`kubit-sdk`),
+- carries any `gen_ai.*` semantic-convention attribute, or
+- comes from a known LLM instrumentation scope (OpenInference, LangSmith, LiteLLM, Vercel AI SDK, OpenLLMetry/Traceloop, Braintrust, Logfire, …).
+
+This keeps HTTP/DB/framework auto-instrumentation noise out of your Kubit workspace without extra configuration.
+
+### Extend the default filter
+
+```python
+from kubit_otel import configure, is_default_export_span
+
+configure(
+    api_key="rg.v1.xxx",
+    should_export_span=lambda span: (
+        is_default_export_span(span)
+        or (
+            span.instrumentation_scope is not None
+            and span.instrumentation_scope.name.startswith("my_framework")
+        )
+    ),
+)
+```
+
+### Full override
+
+```python
+configure(
+    api_key="rg.v1.xxx",
+    should_export_span=lambda span: span.name.startswith("llm."),
+)
+```
+
+### Export everything
+
+```python
+configure(api_key="rg.v1.xxx", should_export_span=lambda _span: True)
+```
 
 ## Python compatibility
 
