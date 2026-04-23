@@ -14,12 +14,7 @@ export {
   KubitSpanProcessor,
   type KubitSpanProcessorConfig,
 } from "./processor";
-export {
-  attach,
-  configure,
-  type AttachOptions,
-  type ConfigureOptions,
-} from "./setup";
+export { configure, type ConfigureOptions } from "./setup";
 export {
   CredentialManager,
   CredentialError,

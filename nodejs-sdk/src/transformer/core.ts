@@ -160,24 +160,12 @@ export function transformSpans(
       span.resource?.attributes ?? {};
     const spanAttrs: Record<string, unknown> = span.attributes ?? {};
 
-    // OTel JS v1 exposes `instrumentationLibrary`; v2 renames to
-    // `instrumentationScope`. Support both without bumping the peer dep.
-    const anySpan = span as unknown as {
-      instrumentationLibrary?: { name?: string; version?: string };
-      instrumentationScope?: { name?: string; version?: string };
-    };
-    const scopeName =
-      anySpan.instrumentationScope?.name ??
-      anySpan.instrumentationLibrary?.name ??
-      null;
-    const scopeVersion =
-      anySpan.instrumentationScope?.version ??
-      anySpan.instrumentationLibrary?.version ??
-      null;
+    const scopeName = span.instrumentationScope?.name ?? null;
+    const scopeVersion = span.instrumentationScope?.version ?? null;
 
     const traceId = span.spanContext().traceId;
     const spanId = span.spanContext().spanId;
-    const parentId = span.parentSpanId || null;
+    const parentId = span.parentSpanContext?.spanId || null;
     const isRoot = parentId === null || parentId === "";
 
     const startIso = hrTimeToIso(span.startTime);

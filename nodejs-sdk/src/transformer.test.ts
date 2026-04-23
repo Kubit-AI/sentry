@@ -14,7 +14,7 @@ function makeSpan(opts: {
   name?: string;
   traceId?: string;
   spanId?: string;
-  parentSpanId?: string | undefined;
+  parentSpanId?: string;
   kind?: SpanKind;
   attrs?: Record<string, unknown>;
   resourceAttrs?: Record<string, unknown>;
@@ -51,7 +51,10 @@ function makeSpan(opts: {
     startTime,
     endTime,
     status: { code: statusCode },
-    parentSpanId,
+    parentSpanContext:
+      parentSpanId === undefined
+        ? undefined
+        : { traceId, spanId: parentSpanId, traceFlags: 1, isRemote: false },
     events,
     spanContext: () => ({
       traceId,
@@ -319,7 +322,6 @@ describe("root + resource mapping", () => {
           name: "plan_trip",
           traceId: "aaa00000000000000000000000000000",
           spanId: "bbb0000000000000",
-          parentSpanId: undefined,
           resourceAttrs: {
             "service.name": "trip-planner",
             "service.version": "0.1.0",
@@ -1209,7 +1211,6 @@ describe("Langfuse metadata promotion", () => {
     const records = transformSpans(
       [
         makeSpan({
-          parentSpanId: undefined,
           attrs: {
             "langfuse.trace.metadata.environment": "prod",
             "langfuse.observation.metadata.retry": "2",

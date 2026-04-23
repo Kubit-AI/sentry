@@ -8,6 +8,21 @@ OpenTelemetry exporter for Kubit analytics.
 npm install @kubit-ai/otel
 ```
 
+Requires the OpenTelemetry JS SDK **v2** as a peer dependency:
+
+```bash
+npm install \
+  @opentelemetry/api \
+  @opentelemetry/resources@^2 \
+  @opentelemetry/sdk-trace-base@^2 \
+  @opentelemetry/sdk-trace-node@^2
+```
+
+OTel JS SDK v1 is **not** supported — the transformer reads
+`ReadableSpan.parentSpanContext.spanId` (v2-only) and `configure()`
+uses `resourceFromAttributes()` and constructor-time `spanProcessors`
+(v2-only APIs).
+
 ## Quick start
 
 ```ts
@@ -40,21 +55,36 @@ instead of calling `configure()`.
 
 ### Works alongside other OTel-based SDKs
 
-`configure()` detects whether a real `TracerProvider` is already installed
-as the global OTel provider. If so, it attaches `KubitSpanProcessor` to
-that provider and merges in your resource attributes — it does **not**
-replace the existing provider. You can call `configure()` before or after
-other OTel-based libraries (Langfuse, OpenLLMetry, an OTel distro, …) and
-every span will reach both sinks.
+`configure()` always constructs a fresh `NodeTracerProvider` and
+registers it as the global provider. OTel JS SDK v2 removed
+`addSpanProcessor` from `BasicTracerProvider` / `NodeTracerProvider`,
+so there is no public API to add a processor to an already-running
+provider — and `@kubit-ai/otel` does not export `attach()`.
 
-If you want explicit "attach only, never register" behavior, use `attach()`:
+To compose Kubit with another OTel-based SDK (Langfuse, OpenLLMetry,
+Phoenix/OpenInference, an OTel distro, …), construct **one**
+`NodeTracerProvider` (or `NodeSDK`) yourself and pass both processors
+at construction time via `spanProcessors: [...]`:
 
 ```ts
-import { attach } from "@kubit-ai/otel";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import { KubitSpanProcessor } from "@kubit-ai/otel";
+// …plus the other SDK's span processor.
 
-// Must be called after another library has installed a real provider.
-attach({ apiKey: "rg.v1.xxx" });
+const provider = new NodeTracerProvider({
+  resource: resourceFromAttributes({ "service.name": "my-app" }),
+  spanProcessors: [
+    otherSdkProcessor,
+    new KubitSpanProcessor({ apiKey: "rg.v1.xxx" }),
+  ],
+});
+provider.register();
 ```
+
+Calling `configure()` in addition to standing up your own provider
+would register a second, parallel `NodeTracerProvider` and clobber
+the first registration — pick one or the other.
 
 ## Supported attributes
 
@@ -111,9 +141,12 @@ new KubitSpanProcessor({
 new KubitSpanProcessor({ apiKey: "rg.v1.xxx", shouldExportSpan: () => true });
 ```
 
-## Node compatibility
+## Compatibility
 
-Node.js 18+
+- Node.js 18+
+- OpenTelemetry JS SDK **v2** (`@opentelemetry/sdk-trace-base`,
+  `@opentelemetry/sdk-trace-node`, `@opentelemetry/resources` all
+  `>= 2.0.0`). v1 is not supported.
 
 ## License
 
