@@ -53,6 +53,8 @@ export const adapter = makeAdapter({
   TOOL_CALLS_ATTRS: ["langfuse.observation.tool_calls"],
   TOOL_CALL_NAMES_ATTRS: ["langfuse.observation.tool_call_names"],
   TOOL_DEFINITIONS_ATTRS: ["langfuse.observation.tool_definitions"],
+  ENVIRONMENT_ATTRS: ["langfuse.environment"],
+  RELEASE_ATTRS: ["langfuse.release"],
   PARAMS_BLOB_ATTRS: [
     "langfuse.observation.model.parameters",
     "langfuse.observation.model_parameters",

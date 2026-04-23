@@ -80,7 +80,9 @@ type AttrKey =
   | "AGENT_VERSION_ATTRS"
   | "TOOL_NAME_ATTRS"
   | "SYSTEM_INSTRUCTIONS_ATTRS"
-  | "PARAMS_BLOB_ATTRS";
+  | "PARAMS_BLOB_ATTRS"
+  | "ENVIRONMENT_ATTRS"
+  | "RELEASE_ATTRS";
 
 function concat(key: AttrKey): readonly string[] {
   const parts: string[] = [];
@@ -118,6 +120,8 @@ export const AGENT_VERSION_ATTRS = concat("AGENT_VERSION_ATTRS");
 export const TOOL_NAME_ATTRS = concat("TOOL_NAME_ATTRS");
 export const SYSTEM_INSTRUCTIONS_ATTRS = concat("SYSTEM_INSTRUCTIONS_ATTRS");
 export const PARAMS_BLOB_ATTRS = concat("PARAMS_BLOB_ATTRS");
+export const ENVIRONMENT_ATTRS = concat("ENVIRONMENT_ATTRS");
+export const RELEASE_ATTRS = concat("RELEASE_ATTRS");
 export const CACHE_TOKEN_MAP = concatPairs();
 
 // Langfuse lets apps set an explicit trace title that overrides whatever
@@ -180,8 +184,14 @@ export function transformSpans(
       firstAttr(spanAttrs, USER_ID_ATTRS) ??
       firstAttr(resourceAttrs, USER_ID_ATTRS) ??
       null;
-    const serviceVersion = resourceAttrs[RESOURCE_SERVICE_VERSION] ?? null;
-    const deploymentEnv = resourceAttrs[RESOURCE_DEPLOYMENT_ENV] ?? null;
+    const serviceVersion =
+      firstAttr(spanAttrs, RELEASE_ATTRS) ??
+      resourceAttrs[RESOURCE_SERVICE_VERSION] ??
+      null;
+    const deploymentEnv =
+      firstAttr(spanAttrs, ENVIRONMENT_ATTRS) ??
+      resourceAttrs[RESOURCE_DEPLOYMENT_ENV] ??
+      null;
     const tags = firstAttr(spanAttrs, TAGS_ATTRS) ?? [];
 
     const fullAttributes = {

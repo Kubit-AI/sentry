@@ -38,6 +38,8 @@ export function makeAdapter(overrides: AdapterOverrides): FrameworkAdapter {
     SYSTEM_INSTRUCTIONS_ATTRS: overrides.SYSTEM_INSTRUCTIONS_ATTRS ?? EMPTY,
     PARAMS_BLOB_ATTRS: overrides.PARAMS_BLOB_ATTRS ?? EMPTY,
     FLAT_PARAM_ATTRS: overrides.FLAT_PARAM_ATTRS ?? EMPTY,
+    ENVIRONMENT_ATTRS: overrides.ENVIRONMENT_ATTRS ?? EMPTY,
+    RELEASE_ATTRS: overrides.RELEASE_ATTRS ?? EMPTY,
     CACHE_TOKEN_MAP: overrides.CACHE_TOKEN_MAP ?? EMPTY_PAIRS,
     resolveObservationType: overrides.resolveObservationType,
     resolveObservationTypeFallback: overrides.resolveObservationTypeFallback,

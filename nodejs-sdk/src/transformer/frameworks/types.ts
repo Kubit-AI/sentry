@@ -35,6 +35,8 @@ export interface FrameworkAdapter {
   readonly SYSTEM_INSTRUCTIONS_ATTRS: readonly string[];
   readonly PARAMS_BLOB_ATTRS: readonly string[];
   readonly FLAT_PARAM_ATTRS: readonly string[];
+  readonly ENVIRONMENT_ATTRS: readonly string[];
+  readonly RELEASE_ATTRS: readonly string[];
   readonly CACHE_TOKEN_MAP: ReadonlyArray<readonly [string, string]>;
 
   resolveObservationType?(attrs: Record<string, unknown>): string | null;
