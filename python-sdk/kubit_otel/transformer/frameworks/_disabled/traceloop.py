@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from ..helpers import clean_discriminator
+from ...helpers import clean_discriminator
 
 NAME = "traceloop"
 

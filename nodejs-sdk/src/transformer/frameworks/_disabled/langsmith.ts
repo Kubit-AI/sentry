@@ -7,8 +7,8 @@
  * cache/audio/reasoning counts land alongside input/output.
  */
 
-import { cleanDiscriminator, mergeJsonBlob } from "../helpers";
-import { makeAdapter } from "./makeAdapter";
+import { cleanDiscriminator, mergeJsonBlob } from "../../helpers";
+import { makeAdapter } from "../makeAdapter";
 
 const SPAN_KIND_ATTR = "langsmith.span.kind";
 const USAGE_DETAIL_BLOB_ATTRS = [

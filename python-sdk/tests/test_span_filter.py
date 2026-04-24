@@ -57,6 +57,18 @@ class TestIsKnownLLMInstrumentor:
     @pytest.mark.parametrize(
         "scope",
         [
+            "kubit-sdk",
+            "langfuse-sdk",
+            "langfuse-sdk.generation",
+        ],
+    )
+    def test_matches(self, scope):
+        assert is_known_llm_instrumentor(_span(scope)) is True
+
+    @pytest.mark.parametrize(
+        "scope",
+        [
+            # Previously in the broad allow-list — now rejected.
             "openinference",
             "openinference.instrumentation.openai",
             "langsmith",
@@ -69,28 +81,12 @@ class TestIsKnownLLMInstrumentor:
             "opentelemetry.instrumentation.anthropic",
             "opentelemetry.instrumentation.bedrock",
             "vllm",
-            # Integration-skill frameworks
             "opentelemetry.instrumentation.openai_agents",
             "opentelemetry.instrumentation.openai_agents.sub",
             "traceloop.tracer",
             "@traceloop/node-server-sdk",
-        ],
-    )
-    def test_matches(self, scope):
-        assert is_known_llm_instrumentor(_span(scope)) is True
-
-    def test_openai_still_matches_after_openai_agents_added(self):
-        """Ensure the more specific `openai_agents` prefix does not shadow `openai`."""
-        assert is_known_llm_instrumentor(_span("opentelemetry.instrumentation.openai")) is True
-        assert (
-            is_known_llm_instrumentor(_span("opentelemetry.instrumentation.openai.chat"))
-            is True
-        )
-
-    @pytest.mark.parametrize(
-        "scope",
-        [
-            "openinfer",                        # boundary — not a prefix
+            # Boundary + generic
+            "langfuse-sdkx",                    # boundary — not a prefix match
             "opentelemetry.instrumentation.fastapi",
             "opentelemetry.instrumentation.requests",
             "sqlalchemy",
@@ -119,7 +115,7 @@ class TestIsDefaultExportSpan:
         )
 
     def test_true_if_known_instrumentor(self):
-        assert is_default_export_span(_span("openinference.instrumentation.openai")) is True
+        assert is_default_export_span(_span("langfuse-sdk")) is True
 
     def test_false_for_generic_span(self):
         assert (
@@ -149,7 +145,7 @@ class TestProcessorFiltering:
 
     def test_drops_span_when_predicate_false(self):
         proc = self._make_processor(should_export_span=lambda _s: False)
-        span = _span("openinference")
+        span = _span("langfuse-sdk")
         span.name = "chat"
         with patch.object(
             type(proc).__mro__[1], "on_end"
@@ -159,7 +155,7 @@ class TestProcessorFiltering:
 
     def test_forwards_span_when_predicate_true(self):
         proc = self._make_processor(should_export_span=lambda _s: True)
-        span = _span("openinference")
+        span = _span("langfuse-sdk")
         span.name = "chat"
         with patch.object(
             type(proc).__mro__[1], "on_end"
@@ -172,7 +168,7 @@ class TestProcessorFiltering:
             raise RuntimeError("predicate exploded")
 
         proc = self._make_processor(should_export_span=boom)
-        span = _span("openinference")
+        span = _span("langfuse-sdk")
         span.name = "chat"
         with patch.object(
             type(proc).__mro__[1], "on_end"
@@ -182,7 +178,7 @@ class TestProcessorFiltering:
 
     def test_default_filter_is_llm_only(self):
         proc = self._make_processor()  # default predicate
-        llm_span = _span("openinference", {})
+        llm_span = _span("langfuse-sdk", {})
         llm_span.name = "chat"
         http_span = _span("opentelemetry.instrumentation.requests", {"http.method": "GET"})
         http_span.name = "GET /foo"

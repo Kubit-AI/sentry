@@ -9,8 +9,8 @@
  * `gen_ai.completion.<n>.*` conversational attrs.
  */
 
-import { cleanDiscriminator } from "../helpers";
-import { makeAdapter } from "./makeAdapter";
+import { cleanDiscriminator } from "../../helpers";
+import { makeAdapter } from "../makeAdapter";
 
 const SPAN_KIND_ATTR = "traceloop.span.kind";
 const LLM_REQUEST_TYPE_ATTR = "llm.request.type";

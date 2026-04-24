@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from ..helpers import clean_discriminator, merge_json_blob
+from ...helpers import clean_discriminator, merge_json_blob
 
 NAME = "openinference"
 

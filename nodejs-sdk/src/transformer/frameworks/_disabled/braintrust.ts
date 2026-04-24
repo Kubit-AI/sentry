@@ -8,10 +8,16 @@
  * `span_attributes.type`.
  */
 
-import { cleanDiscriminator, safeFloat } from "../helpers";
-import { makeAdapter } from "./makeAdapter";
+import { cleanDiscriminator, safeFloat } from "../../helpers";
+import { makeAdapter } from "../makeAdapter";
 
-const SPAN_TYPE_ATTR = "span_attributes.type";
+// Some emitters namespace the discriminator under `braintrust.` per OTel
+// attribute-naming conventions; native Braintrust keeps it unprefixed.
+// Accept both, preferring the namespaced form if present.
+const SPAN_TYPE_ATTRS = [
+  "braintrust.span_attributes.type",
+  "span_attributes.type",
+] as const;
 const METRICS_PREFIX = "braintrust.metrics.";
 const INPUT_INDEX_PREFIX = "braintrust.input.";
 const OUTPUT_INDEX_PREFIX = "braintrust.output.";
@@ -51,10 +57,13 @@ export const adapter = makeAdapter({
   INPUT_ATTRS: ["braintrust.input_json", "gen_ai.prompt_json"],
   OUTPUT_ATTRS: ["braintrust.output_json", "gen_ai.completion_json"],
   resolveObservationType(attrs) {
-    const bt = cleanDiscriminator(attrs[SPAN_TYPE_ATTR]);
-    if (!bt) return null;
-    if (bt === "llm") return "GENERATION";
-    return bt.toUpperCase();
+    for (const key of SPAN_TYPE_ATTRS) {
+      const bt = cleanDiscriminator(attrs[key]);
+      if (!bt) continue;
+      if (bt === "llm") return "GENERATION";
+      return bt.toUpperCase();
+    }
+    return null;
   },
   unpackMessages(attrs) {
     return [

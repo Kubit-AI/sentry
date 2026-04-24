@@ -58,3 +58,8 @@ Documentation = "https://docs.kubit.ai"
 
 [tool.setuptools.packages.find]
 include = ["kubit_otel*"]
+exclude = ["kubit_otel.transformer.frameworks._disabled*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["_disabled"]

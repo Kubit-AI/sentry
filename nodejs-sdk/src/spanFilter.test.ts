@@ -55,32 +55,16 @@ describe("isGenAISpan", () => {
 });
 
 describe("isKnownLLMInstrumentor", () => {
-  const accepted = [
+  const accepted = ["kubit-sdk", "langfuse-sdk", "langfuse-sdk.generation"];
+  const rejected = [
     "openinference",
-    "openinference.instrumentation.openai",
     "langsmith",
-    "litellm",
-    "ai",
-    "ai.vercel",
     "braintrust",
     "logfire",
-    "opentelemetry.instrumentation.openai",
-    "opentelemetry.instrumentation.anthropic",
-    "opentelemetry.instrumentation.bedrock",
-    "vllm",
-    // Integration-skill frameworks
-    "opentelemetry.instrumentation.openai_agents",
-    "opentelemetry.instrumentation.openai_agents.sub",
     "traceloop.tracer",
-    "@traceloop/node-server-sdk",
-  ];
-  const rejected = [
-    "openinfer", // boundary
-    "opentelemetry.instrumentation.fastapi",
-    "opentelemetry.instrumentation.requests",
-    "sqlalchemy",
-    "my_framework",
+    "opentelemetry.instrumentation.openai_agents",
     "",
+    "my_framework",
   ];
   it.each(accepted)("accepts scope %s", (scope) => {
     expect(isKnownLLMInstrumentor(makeSpan({ scopeName: scope }))).toBe(true);
@@ -90,19 +74,6 @@ describe("isKnownLLMInstrumentor", () => {
   });
   it("rejects null scope", () => {
     expect(isKnownLLMInstrumentor(makeSpan({ scopeName: null }))).toBe(false);
-  });
-  it("openai still matches after openai_agents prefix added", () => {
-    // Guard against the more-specific `openai_agents` prefix shadowing `openai`.
-    expect(
-      isKnownLLMInstrumentor(
-        makeSpan({ scopeName: "opentelemetry.instrumentation.openai" }),
-      ),
-    ).toBe(true);
-    expect(
-      isKnownLLMInstrumentor(
-        makeSpan({ scopeName: "opentelemetry.instrumentation.openai.chat" }),
-      ),
-    ).toBe(true);
   });
 });
 
@@ -124,9 +95,7 @@ describe("isDefaultExportSpan", () => {
   });
   it("true for known LLM instrumentor", () => {
     expect(
-      isDefaultExportSpan(
-        makeSpan({ scopeName: "openinference.instrumentation.openai" }),
-      ),
+      isDefaultExportSpan(makeSpan({ scopeName: "langfuse-sdk" })),
     ).toBe(true);
   });
   it("false for generic http span", () => {
@@ -190,7 +159,7 @@ describe("KubitSpanProcessor filtering", () => {
       shouldExportSpan: () => true,
     });
     const { stub, restore } = stubSuperOnEnd(proc);
-    const span = makeSpan({ scopeName: "openinference" });
+    const span = makeSpan({ scopeName: "langfuse-sdk" });
     proc.onEnd(span);
     expect(stub).toHaveBeenCalledWith(span);
     restore();
@@ -203,7 +172,7 @@ describe("KubitSpanProcessor filtering", () => {
       shouldExportSpan: () => false,
     });
     const { stub, restore } = stubSuperOnEnd(proc);
-    proc.onEnd(makeSpan({ scopeName: "openinference" }));
+    proc.onEnd(makeSpan({ scopeName: "langfuse-sdk" }));
     expect(stub).not.toHaveBeenCalled();
     restore();
   });
@@ -217,16 +186,16 @@ describe("KubitSpanProcessor filtering", () => {
       },
     });
     const { stub, restore } = stubSuperOnEnd(proc);
-    proc.onEnd(makeSpan({ scopeName: "openinference" }));
+    proc.onEnd(makeSpan({ scopeName: "langfuse-sdk" }));
     expect(stub).not.toHaveBeenCalled();
     restore();
   });
 
-  it("default predicate keeps openinference, drops http", async () => {
+  it("default predicate keeps langfuse-sdk, drops http", async () => {
     const KubitSpanProcessor = await loadProcessor();
     const proc = new KubitSpanProcessor({ apiKey: "rg.v1.x.y" });
     const { stub, restore } = stubSuperOnEnd(proc);
-    const llm = makeSpan({ scopeName: "openinference" });
+    const llm = makeSpan({ scopeName: "langfuse-sdk" });
     const http = makeSpan({
       scopeName: "opentelemetry.instrumentation.requests",
       attrs: { "http.method": "GET" },

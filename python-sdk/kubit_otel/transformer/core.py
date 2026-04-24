@@ -16,12 +16,8 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 
 from .frameworks import (
-    braintrust as _braintrust,
     langfuse as _langfuse,
-    langsmith as _langsmith,
-    openinference as _openinference,
     otel_genai as _otel_genai,
-    traceloop as _traceloop,
 )
 from .helpers import (
     first_attr,
@@ -405,14 +401,9 @@ def _resolve_output(span_attrs: dict) -> Any:
 
 # Observation-type discriminator priority is independent of the alias-tuple
 # registry order: emitters that set both a vendor discriminator AND their own
-# native attrs still expect the vendor discriminator to win. This ordering
-# matches the pre-refactor ``_resolve_observation_type`` resolution chain.
+# native attrs still expect the vendor discriminator to win.
 _DISCRIMINATOR_ORDER = (
     _langfuse,
-    _openinference,
-    _langsmith,
-    _braintrust,
-    _traceloop,
     _otel_genai,
 )
 
@@ -446,20 +437,11 @@ def _resolve_observation_type(span: Any, span_attrs: dict, model: Any) -> str:
 
 
 def _resolve_provider(span_attrs: dict) -> Optional[str]:
-    """Return the provider/system id, normalising Vercel's prefixed form.
-
-    Iterates PROVIDER_ATTRS in registry priority order. For ``ai.model.provider``
-    specifically, applies Vercel's prefix→OTel-system mapping so consumers see
-    ``aws_bedrock`` instead of ``amazon-bedrock.claude-3-5``.
-    """
-    from .frameworks.vercel_ai import normalise_provider
-
+    """Return the provider/system id from the first PROVIDER_ATTRS hit."""
     for attr in PROVIDER_ATTRS:
         val = span_attrs.get(attr)
         if val is None:
             continue
-        if attr == "ai.model.provider":
-            return normalise_provider(val)
         return val if isinstance(val, str) else str(val)
     return None
 

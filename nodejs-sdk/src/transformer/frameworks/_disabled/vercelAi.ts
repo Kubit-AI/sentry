@@ -8,7 +8,7 @@
  * provider normalisation (e.g. `amazon-bedrock.*` → `aws_bedrock`).
  */
 
-import { makeAdapter } from "./makeAdapter";
+import { makeAdapter } from "../makeAdapter";
 
 const AI_REQUEST_PARAM_MAP: ReadonlyArray<readonly [string, string]> = [
   ["ai.request.temperature", "temperature"],

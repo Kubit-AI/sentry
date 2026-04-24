@@ -18,7 +18,6 @@ import {
   PROMPT_VERSION_ATTRS,
 } from "./frameworks/langfuse";
 import type { FrameworkAdapter } from "./frameworks/types";
-import { normaliseProvider } from "./frameworks/vercelAi";
 import {
   firstAttr,
   hrDurationMs,
@@ -400,7 +399,6 @@ function resolveProvider(spanAttrs: Record<string, unknown>): string | null {
   for (const attr of PROVIDER_ATTRS) {
     const val = spanAttrs[attr];
     if (val === undefined || val === null) continue;
-    if (attr === "ai.model.provider") return normaliseProvider(val);
     return typeof val === "string" ? val : String(val);
   }
   return null;

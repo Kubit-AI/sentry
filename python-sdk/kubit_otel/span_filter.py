@@ -41,40 +41,7 @@ ShouldExportSpan = Callable[[ReadableSpan], bool]
 KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES = frozenset(
     {
         KUBIT_TRACER_NAME,
-        # Langfuse's default allow-list (verbatim) — kept for apps that
-        # instrument with the Langfuse SDK or any of the upstream frameworks
-        # Langfuse already supports.
         "langfuse-sdk",
-        "agent_framework",
-        "ai",                                      # Vercel AI SDK
-        "haystack",
-        "langsmith",
-        "litellm",
-        "openinference",                           # Arize / OpenInference family
-        "opentelemetry.instrumentation.anthropic",
-        "strands-agents",
-        "vllm",
-        # Additional scopes this project's transformer already aliases per
-        # CLAUDE.md (Braintrust, Logfire, OpenLLMetry/Traceloop family).
-        "braintrust",
-        "logfire",
-        "opentelemetry.instrumentation.openai",
-        "opentelemetry.instrumentation.bedrock",
-        "opentelemetry.instrumentation.vertexai",
-        "opentelemetry.instrumentation.google_generativeai",
-        "opentelemetry.instrumentation.cohere",
-        "opentelemetry.instrumentation.mistralai",
-        "opentelemetry.instrumentation.groq",
-        "opentelemetry.instrumentation.ollama",
-        "opentelemetry.instrumentation.together",
-        "opentelemetry.instrumentation.replicate",
-        # OpenAI Agents SDK — opentelemetry-instrumentation-openai-agents-v2
-        # emits under this scope. Note the trailing `_agents` makes this a
-        # distinct prefix from `opentelemetry.instrumentation.openai`.
-        "opentelemetry.instrumentation.openai_agents",
-        # Traceloop / OpenLLMetry SDK workflow + task decorator spans.
-        "traceloop.tracer",              # Python SDK tracer name
-        "@traceloop/node-server-sdk",    # JS SDK tracer name (kept for parity)
     }
 )
 
