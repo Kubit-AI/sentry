@@ -94,13 +94,13 @@ twine upload dist/*
 ### Install
 
 ```bash
-npm install @kubit/otel
+npm install @kubit-ai/otel
 ```
 
 ### Quick start
 
 ```typescript
-import { configure } from "@kubit/otel";
+import { configure } from "@kubit-ai/otel";
 import { trace, SpanKind } from "@opentelemetry/api";
 
 const provider = configure({ apiKey: "rg.v1.xxx", serviceName: "my-app" });
@@ -124,7 +124,7 @@ await provider.shutdown();
 **Option 1 — `configure()` one-liner** (recommended)
 
 ```typescript
-import { configure } from "@kubit/otel";
+import { configure } from "@kubit-ai/otel";
 
 const provider = configure({
   apiKey: "rg.v1.xxx",
@@ -136,26 +136,31 @@ const provider = configure({
 });
 ```
 
-**Option 2 — `KubitSpanProcessor`** (add to existing provider)
+**Option 2 — `KubitSpanProcessor`** (compose with your own provider)
+
+OTel JS SDK v2 removed `addSpanProcessor` from `NodeTracerProvider`, so processors must be supplied at construction time:
 
 ```typescript
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { KubitSpanProcessor } from "@kubit/otel";
+import { KubitSpanProcessor } from "@kubit-ai/otel";
 
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(new KubitSpanProcessor({ apiKey: "rg.v1.xxx" }));
+const provider = new NodeTracerProvider({
+  spanProcessors: [new KubitSpanProcessor({ apiKey: "rg.v1.xxx" })],
+});
 provider.register();
 ```
 
 **Option 3 — `KubitExporter`** (full control)
 
 ```typescript
-import { NodeTracerProvider, BatchSpanProcessor } from "@opentelemetry/sdk-trace-node";
-import { KubitExporter } from "@kubit/otel";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { KubitExporter } from "@kubit-ai/otel";
 
 const exporter = new KubitExporter({ apiKey: "rg.v1.xxx" });
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(new BatchSpanProcessor(exporter));
+const provider = new NodeTracerProvider({
+  spanProcessors: [new BatchSpanProcessor(exporter)],
+});
 provider.register();
 ```
 

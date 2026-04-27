@@ -316,8 +316,8 @@ class TestObservationTypePassThrough:
     record rather than collapsing to SPAN.
 
     Only the otel_genai + langfuse cases live here; discriminators emitted by
-    currently-disabled adapters (openinference, langsmith, braintrust,
-    traceloop) are covered in ``tests/_disabled/test_transformer.py``.
+    other adapters (openinference, langsmith, braintrust, traceloop) are
+    covered in ``tests/test_transformer_broad.py``.
     """
 
     def test_gen_ai_operation_embedding_maps_to_embedding(self):
@@ -348,7 +348,7 @@ class TestProviderExtraction:
     """Provider/system id lands on a dedicated top-level field.
 
     Only the otel_genai cases live here; the openinference ``llm.system``
-    case is covered in ``tests/_disabled/test_transformer.py``.
+    case is covered in ``tests/test_transformer_broad.py``.
     """
 
     def test_gen_ai_provider_name_preferred(self):
@@ -474,3 +474,195 @@ class TestLangfuseTraceNameOverride:
         span = _mock_span(name="root-span")
         records = transform_spans([span], "wid", "claim")
         assert _trace(records)["name"] == "root-span"
+
+
+class TestVercelAiSdk:
+    """Vercel AI SDK (``ai.*`` namespace) adapter coverage."""
+
+    def test_generate_text_maps_to_agent_with_function_id(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.generateText",
+                "ai.telemetry.functionId": "calcbot.turn",
+                "ai.model.provider": "anthropic.messages",
+                "ai.prompt": '{"prompt":"What is 47 + 38?"}',
+                "ai.response.text": "The result of 47 + 38 is 85.",
+                "ai.usage.promptTokens": 704,
+                "ai.usage.completionTokens": 17,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "AGENT"
+        assert obs["agent_name"] == "calcbot.turn"
+        assert obs["input"] == '{"prompt":"What is 47 + 38?"}'
+        assert obs["output"] == "The result of 47 + 38 is 85."
+        assert obs["provider"] == "anthropic"
+        usage = obs["usage_details"]
+        assert usage["input"] == 704
+        assert usage["output"] == 17
+        assert usage["total"] == 721
+
+    def test_tool_call_maps_to_tool(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.toolCall",
+                "ai.toolCall.name": "add",
+                "ai.toolCall.id": "toolu_01ChBBJ3Y8k8kaBzAeEjuxyP",
+                "ai.toolCall.args": '{"a":47,"b":38}',
+                "ai.toolCall.result": "85",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "TOOL"
+        assert obs["tool_name"] == "add"
+        assert obs["input"] == '{"a":47,"b":38}'
+        assert obs["output"] == "85"
+
+    def test_stream_text_maps_to_agent(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={"ai.operationId": "ai.streamText"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "AGENT"
+
+    def test_embed_maps_to_embedding(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={"ai.operationId": "ai.embed"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDING"
+
+    def test_do_generate_with_tool_calls_output(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.generateText.doGenerate",
+                "ai.prompt.messages": (
+                    '[{"role":"user","content":'
+                    '[{"type":"text","text":"What is 47 + 38?"}]}]'
+                ),
+                "ai.response.toolCalls": (
+                    '[{"toolCallId":"toolu_1","toolName":"add",'
+                    '"input":"{\\"a\\":47,\\"b\\":38}"}]'
+                ),
+                "gen_ai.system": "anthropic.messages",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["input"] == (
+            '[{"role":"user","content":'
+            '[{"type":"text","text":"What is 47 + 38?"}]}]'
+        )
+        assert obs["output"] == (
+            '[{"toolCallId":"toolu_1","toolName":"add",'
+            '"input":"{\\"a\\":47,\\"b\\":38}"}]'
+        )
+
+    def test_do_generate_with_text_output(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.generateText.doGenerate",
+                "ai.prompt.messages": '[{"role":"user","content":"hi"}]',
+                "ai.response.text": "hello",
+                "gen_ai.system": "openai",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["input"] == '[{"role":"user","content":"hi"}]'
+        assert obs["output"] == "hello"
+
+    def test_do_generate_falls_through_to_otel_genai(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.generateText.doGenerate",
+                "gen_ai.system": "anthropic.messages",
+                "gen_ai.request.model": "claude-sonnet-4-6",
+                "gen_ai.usage.input_tokens": 622,
+                "gen_ai.usage.output_tokens": 69,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "GENERATION"
+        assert obs["model"] == "claude-sonnet-4-6"
+        assert obs["provider"] == "anthropic"
+
+    def test_provider_normalisation_via_hook(self):
+        cases = [
+            ("amazon-bedrock.claude-3-5", "aws_bedrock"),
+            ("google-vertex.gemini", "vertex_ai"),
+            ("openai.chat", "openai"),
+            ("anthropic.messages", "anthropic"),
+            ("xai.grok-1", "xai"),
+        ]
+        for raw, normalised in cases:
+            span = _mock_span(
+                attributes={
+                    "ai.operationId": "ai.generateText",
+                    "ai.model.provider": raw,
+                },
+            )
+            [obs] = _observations(transform_spans([span], "wid", "claim"))
+            assert obs["provider"] == normalised, f"{raw} -> {normalised}"
+
+    def test_non_vercel_provider_passes_through_untouched(self):
+        # Guards against resolve_provider firing on spans without `ai.operationId`.
+        span = _mock_span(attributes={"gen_ai.system": "some.custom.value"})
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provider"] == "some.custom.value"
+
+    def test_ai_request_params_remapped_to_snake_case(self):
+        span = _mock_span(
+            attributes={
+                "ai.operationId": "ai.generateText",
+                "ai.request.temperature": 0.3,
+                "ai.request.topP": 0.9,
+                "ai.request.maxTokens": 256,
+                "ai.request.stopSequences": ["\n\n"],
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["model_parameters"] == {
+            "temperature": 0.3,
+            "top_p": 0.9,
+            "max_tokens": 256,
+            "stop_sequences": ["\n\n"],
+        }
+
+
+class TestLangfuseEnvAndReleaseSpanAttrs:
+    """``langfuse.environment`` / ``langfuse.release`` on the span take
+    precedence over ``deployment.environment`` / ``service.version`` on the
+    resource — apps set these per-request."""
+
+    def test_span_attrs_win_over_resource(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.environment": "staging",
+                "langfuse.release": "git-abc123",
+            },
+            resource_attrs={
+                "deployment.environment": "prod",
+                "service.version": "1.0.0",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["environment"] == "staging"
+        assert obs["release"] == "git-abc123"
+        assert obs["version"] == "git-abc123"
+
+    def test_resource_attrs_used_when_span_attrs_absent(self):
+        span = _mock_span(
+            resource_attrs={
+                "deployment.environment": "prod",
+                "service.version": "1.0.0",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["environment"] == "prod"
+        assert obs["release"] == "1.0.0"

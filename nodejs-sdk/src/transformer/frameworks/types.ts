@@ -41,6 +41,7 @@ export interface FrameworkAdapter {
 
   resolveObservationType?(attrs: Record<string, unknown>): string | null;
   resolveObservationTypeFallback?(attrs: Record<string, unknown>): string | null;
+  resolveProvider?(attrs: Record<string, unknown>): string | null;
   parseUsageBlobs?(attrs: Record<string, unknown>, usageDetails: Record<string, unknown>): void;
   parseCostBlobs?(attrs: Record<string, unknown>, costDetails: Record<string, unknown>): void;
   buildParams?(attrs: Record<string, unknown>, merged: Record<string, unknown>): void;

@@ -1,14 +1,8 @@
-"""Broad instrumentation-scope allow-list assertions, kept for re-enablement.
+"""Broad instrumentation-scope allow-list assertions.
 
-The shipped SDK currently narrows ``KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES``
-to just ``{"kubit-sdk", "langfuse-sdk"}``. These cases exercise the previous
-broad allow-list (openinference, langsmith, braintrust, logfire, traceloop,
-the OpenLLMetry vendor family, OpenAI Agents, Vercel AI) and are marked
-``skip`` so they don't fail while those adapters are parked under
-``kubit_otel/transformer/frameworks/_disabled/``.
-
-``pytest tests/`` skips this whole file via ``norecursedirs = ["_disabled"]``;
-running ``pytest tests/_disabled/`` still honours the per-class skip marker.
+Covers the full allow-list spanning openinference, langsmith, braintrust,
+logfire, traceloop, the OpenLLMetry vendor family, OpenAI Agents, and
+Vercel AI.
 """
 
 from __future__ import annotations
@@ -31,9 +25,6 @@ def _span(scope_name: str | None = None, attrs: dict | None = None):
     return span
 
 
-@pytest.mark.skip(
-    reason="covers scopes not in shipped allow-list — kept for re-enablement reference"
-)
 class TestIsKnownLLMInstrumentorBroad:
     @pytest.mark.parametrize(
         "scope",
@@ -41,7 +32,6 @@ class TestIsKnownLLMInstrumentorBroad:
             "openinference",
             "openinference.instrumentation.openai",
             "langsmith",
-            "litellm",
             "ai",
             "ai.vercel",
             "braintrust",

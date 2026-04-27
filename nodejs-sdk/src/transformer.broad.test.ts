@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
-import { transformSpans } from "../../../transformer";
+import { transformSpans } from "./transformer";
 
 type SpanEventInput = {
   name: string;
@@ -484,69 +484,6 @@ describe("Observation type pass-through (disabled adapters)", () => {
       ),
     );
     expect(obs.type).toBe("CHAIN");
-  });
-});
-
-describe("Vercel AI raw ai.* schema (no adapter)", () => {
-  const attrs = () => ({
-    "ai.model.provider": "amazon-bedrock.claude-3-5",
-    "ai.model.id": "claude-3-5-sonnet-20241022",
-    "ai.response.model": "claude-3-5-sonnet-20241022-v1:0",
-    "ai.prompt": "hello",
-    "ai.response": "hi there",
-    "ai.usage.promptTokens": 12,
-    "ai.usage.completionTokens": 4,
-    "ai.request.temperature": 0.3,
-    "ai.request.topP": 0.9,
-    "ai.request.maxTokens": 256,
-    "ai.request.stopSequences": ["\n\n"],
-  });
-
-  it("uses ai.response.model as the primary model", () => {
-    const [obs] = observations(
-      transformSpans([makeSpan({ scopeName: "ai", attrs: attrs() })], "wid", "claim"),
-    );
-    expect(obs.model).toBe("claude-3-5-sonnet-20241022-v1:0");
-  });
-
-  it("maps ai.prompt/ai.response to input/output", () => {
-    const [obs] = observations(transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"));
-    expect(obs.input).toBe("hello");
-    expect(obs.output).toBe("hi there");
-  });
-
-  it("captures camelCase usage tokens", () => {
-    const [obs] = observations(transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"));
-    const usage = obs.usage_details as Record<string, number>;
-    expect(usage.input).toBe(12);
-    expect(usage.output).toBe(4);
-    expect(usage.total).toBe(16);
-  });
-
-  it("normalises ai.model.provider prefix to OTel system id", () => {
-    const [obs] = observations(transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"));
-    expect(obs.provider).toBe("aws_bedrock");
-  });
-
-  it("remaps ai.request.* camelCase params to snake_case", () => {
-    const [obs] = observations(transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"));
-    expect(obs.model_parameters).toEqual({
-      temperature: 0.3,
-      top_p: 0.9,
-      max_tokens: 256,
-      stop_sequences: ["\n\n"],
-    });
-  });
-
-  it("passes through unknown provider prefixes", () => {
-    const [obs] = observations(
-      transformSpans(
-        [makeSpan({ attrs: { "ai.model.provider": "xai.grok-1" } })],
-        "wid",
-        "claim",
-      ),
-    );
-    expect(obs.provider).toBe("xai");
   });
 });
 

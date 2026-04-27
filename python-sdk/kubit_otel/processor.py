@@ -31,8 +31,8 @@ class KubitSpanProcessor(BatchSpanProcessor):
 
     By default, only LLM-relevant spans are forwarded — spans created by the
     Kubit SDK, spans carrying a ``gen_ai.*`` attribute, and spans from known
-    LLM instrumentation scopes (OpenInference, LangSmith, LiteLLM, Vercel AI
-    SDK, OpenLLMetry, Braintrust, …). Override via ``should_export_span``.
+    LLM instrumentation scopes (Langfuse, Vercel AI SDK, …). Override via
+    ``should_export_span``.
 
     Parameters
     ----------

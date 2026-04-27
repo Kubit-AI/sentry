@@ -43,6 +43,7 @@ export function makeAdapter(overrides: AdapterOverrides): FrameworkAdapter {
     CACHE_TOKEN_MAP: overrides.CACHE_TOKEN_MAP ?? EMPTY_PAIRS,
     resolveObservationType: overrides.resolveObservationType,
     resolveObservationTypeFallback: overrides.resolveObservationTypeFallback,
+    resolveProvider: overrides.resolveProvider,
     parseUsageBlobs: overrides.parseUsageBlobs,
     parseCostBlobs: overrides.parseCostBlobs,
     buildParams: overrides.buildParams,

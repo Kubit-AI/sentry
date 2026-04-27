@@ -105,7 +105,7 @@ By default, only LLM-relevant spans are forwarded to Kubit. A span is exported i
 
 - was created by the Kubit SDK tracer (`kubit-sdk`),
 - carries any `gen_ai.*` semantic-convention attribute, or
-- comes from a known LLM instrumentation scope (OpenInference, LangSmith, LiteLLM, Vercel AI SDK, OpenLLMetry/Traceloop, Braintrust, Logfire, …).
+- comes from a known LLM instrumentation scope (OpenInference, Langfuse, Vercel AI SDK, …).
 
 This keeps HTTP/DB/framework auto-instrumentation noise out of your Kubit workspace without extra configuration. Filtering lives on `KubitSpanProcessor`; bare `KubitExporter` consumers can apply the helpers manually.
 

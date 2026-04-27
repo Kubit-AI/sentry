@@ -8,8 +8,8 @@
  * `span_attributes.type`.
  */
 
-import { cleanDiscriminator, safeFloat } from "../../helpers";
-import { makeAdapter } from "../makeAdapter";
+import { cleanDiscriminator, safeFloat } from "../helpers";
+import { makeAdapter } from "./makeAdapter";
 
 // Some emitters namespace the discriminator under `braintrust.` per OTel
 // attribute-naming conventions; native Braintrust keeps it unprefixed.

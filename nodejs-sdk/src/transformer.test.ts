@@ -596,3 +596,225 @@ describe("Langfuse trace name override", () => {
     expect(trace(records).name).toBe("root-span");
   });
 });
+
+describe("Vercel AI SDK", () => {
+  it("maps ai.operationId=ai.generateText to AGENT with agent_name from functionId", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.generateText",
+              "ai.telemetry.functionId": "calcbot.turn",
+              "ai.model.provider": "anthropic.messages",
+              "ai.prompt": '{"prompt":"What is 47 + 38?"}',
+              "ai.response.text": "The result of 47 + 38 is 85.",
+              "ai.usage.promptTokens": 704,
+              "ai.usage.completionTokens": 17,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("AGENT");
+    expect(obs.agent_name).toBe("calcbot.turn");
+    expect(obs.input).toBe('{"prompt":"What is 47 + 38?"}');
+    expect(obs.output).toBe("The result of 47 + 38 is 85.");
+    expect(obs.provider).toBe("anthropic");
+    const usage = obs.usage_details as Record<string, number>;
+    expect(usage.input).toBe(704);
+    expect(usage.output).toBe(17);
+    expect(usage.total).toBe(721);
+  });
+
+  it("maps ai.operationId=ai.toolCall to TOOL with tool_name/input/output", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.toolCall",
+              "ai.toolCall.name": "add",
+              "ai.toolCall.id": "toolu_01ChBBJ3Y8k8kaBzAeEjuxyP",
+              "ai.toolCall.args": '{"a":47,"b":38}',
+              "ai.toolCall.result": "85",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("TOOL");
+    expect(obs.tool_name).toBe("add");
+    expect(obs.input).toBe('{"a":47,"b":38}');
+    expect(obs.output).toBe("85");
+  });
+
+  it("maps ai.operationId=ai.streamText to AGENT", () => {
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ scopeName: "ai", attrs: { "ai.operationId": "ai.streamText" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("AGENT");
+  });
+
+  it("maps ai.operationId=ai.embed to EMBEDDING", () => {
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ scopeName: "ai", attrs: { "ai.operationId": "ai.embed" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDING");
+  });
+
+  it("doGenerate with tool-use output captures ai.response.toolCalls as output", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.generateText.doGenerate",
+              "ai.prompt.messages":
+                '[{"role":"user","content":[{"type":"text","text":"What is 47 + 38?"}]}]',
+              "ai.response.toolCalls":
+                '[{"toolCallId":"toolu_1","toolName":"add","input":"{\\"a\\":47,\\"b\\":38}"}]',
+              "gen_ai.system": "anthropic.messages",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toBe(
+      '[{"role":"user","content":[{"type":"text","text":"What is 47 + 38?"}]}]',
+    );
+    expect(obs.output).toBe(
+      '[{"toolCallId":"toolu_1","toolName":"add","input":"{\\"a\\":47,\\"b\\":38}"}]',
+    );
+  });
+
+  it("doGenerate with text output captures ai.response.text as output", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.generateText.doGenerate",
+              "ai.prompt.messages": '[{"role":"user","content":"hi"}]',
+              "ai.response.text": "hello",
+              "gen_ai.system": "openai",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toBe('[{"role":"user","content":"hi"}]');
+    expect(obs.output).toBe("hello");
+  });
+
+  it("doGenerate spans fall through to GENERATION via gen_ai.* (otelGenai adapter)", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.generateText.doGenerate",
+              "gen_ai.system": "anthropic.messages",
+              "gen_ai.request.model": "claude-sonnet-4-6",
+              "gen_ai.usage.input_tokens": 622,
+              "gen_ai.usage.output_tokens": 69,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("GENERATION");
+    expect(obs.model).toBe("claude-sonnet-4-6");
+    expect(obs.provider).toBe("anthropic");
+  });
+
+  it("normalises provider prefixes via resolveProvider hook", () => {
+    const cases: Array<[string, string]> = [
+      ["amazon-bedrock.claude-3-5", "aws_bedrock"],
+      ["google-vertex.gemini", "vertex_ai"],
+      ["openai.chat", "openai"],
+      ["anthropic.messages", "anthropic"],
+      ["xai.grok-1", "xai"],
+    ];
+    for (const [raw, normalised] of cases) {
+      const [obs] = observations(
+        transformSpans(
+          [
+            makeSpan({
+              attrs: {
+                "ai.operationId": "ai.generateText",
+                "ai.model.provider": raw,
+              },
+            }),
+          ],
+          "wid",
+          "claim",
+        ),
+      );
+      expect(obs.provider).toBe(normalised);
+    }
+  });
+
+  it("does not normalise provider for non-Vercel spans", () => {
+    // A non-Vercel span carrying a dotted gen_ai.system should NOT be
+    // rewritten by the vercelAi adapter — normalisation is gated on the
+    // Vercel-specific `ai.operationId` sentinel.
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ attrs: { "gen_ai.system": "some.custom.value" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provider).toBe("some.custom.value");
+  });
+
+  it("remaps ai.request.* camelCase params to snake_case model_parameters", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "ai.operationId": "ai.generateText",
+              "ai.request.temperature": 0.3,
+              "ai.request.topP": 0.9,
+              "ai.request.maxTokens": 256,
+              "ai.request.stopSequences": ["\n\n"],
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.model_parameters).toEqual({
+      temperature: 0.3,
+      top_p: 0.9,
+      max_tokens: 256,
+      stop_sequences: ["\n\n"],
+    });
+  });
+});

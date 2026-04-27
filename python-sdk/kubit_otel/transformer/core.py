@@ -17,7 +17,6 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 from .frameworks import (
     langfuse as _langfuse,
-    otel_genai as _otel_genai,
 )
 from .helpers import (
     first_attr,
@@ -27,7 +26,7 @@ from .helpers import (
     safe_float,
     safe_int,
 )
-from .registry import FRAMEWORKS
+from .registry import DISCRIMINATOR_ORDER, FRAMEWORKS
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +104,8 @@ AGENT_VERSION_ATTRS = _concat("AGENT_VERSION_ATTRS")
 TOOL_NAME_ATTRS = _concat("TOOL_NAME_ATTRS")
 SYSTEM_INSTRUCTIONS_ATTRS = _concat("SYSTEM_INSTRUCTIONS_ATTRS")
 PARAMS_BLOB_ATTRS = _concat("PARAMS_BLOB_ATTRS")
+ENVIRONMENT_ATTRS = _concat("ENVIRONMENT_ATTRS")
+RELEASE_ATTRS = _concat("RELEASE_ATTRS")
 CACHE_TOKEN_MAP = _concat_pairs("CACHE_TOKEN_MAP")
 
 # Resource attribute names (fall-back when span-level isn't set).
@@ -166,8 +167,14 @@ def transform_spans(
             first_attr(span_attrs, USER_ID_ATTRS)
             or first_attr(resource_attrs, USER_ID_ATTRS)
         )
-        service_version = resource_attrs.get(_RESOURCE_SERVICE_VERSION)
-        deployment_env = resource_attrs.get(_RESOURCE_DEPLOYMENT_ENV)
+        service_version = (
+            first_attr(span_attrs, RELEASE_ATTRS)
+            or resource_attrs.get(_RESOURCE_SERVICE_VERSION)
+        )
+        deployment_env = (
+            first_attr(span_attrs, ENVIRONMENT_ATTRS)
+            or resource_attrs.get(_RESOURCE_DEPLOYMENT_ENV)
+        )
         tags = first_attr(span_attrs, TAGS_ATTRS) or []
 
         full_attributes = {
@@ -399,15 +406,6 @@ def _resolve_output(span_attrs: dict) -> Any:
     return None
 
 
-# Observation-type discriminator priority is independent of the alias-tuple
-# registry order: emitters that set both a vendor discriminator AND their own
-# native attrs still expect the vendor discriminator to win.
-_DISCRIMINATOR_ORDER = (
-    _langfuse,
-    _otel_genai,
-)
-
-
 def _resolve_observation_type(span: Any, span_attrs: dict, model: Any) -> str:
     """Resolve Kubit observation type by consulting each adapter in discriminator order.
 
@@ -415,7 +413,7 @@ def _resolve_observation_type(span: Any, span_attrs: dict, model: Any) -> str:
     forces ``GENERATION``; otherwise the OTel ``SpanKind`` map is consulted
     as the final fallback.
     """
-    for fw in _DISCRIMINATOR_ORDER:
+    for fw in DISCRIMINATOR_ORDER:
         resolve = getattr(fw, "resolve_observation_type", None)
         if resolve is None:
             continue
@@ -424,7 +422,7 @@ def _resolve_observation_type(span: Any, span_attrs: dict, model: Any) -> str:
             return result
     # Fallback chain: last-resort discriminators (e.g. Traceloop's
     # ``llm.request.type``) that must lose to standard ``gen_ai.operation.name``.
-    for fw in _DISCRIMINATOR_ORDER:
+    for fw in DISCRIMINATOR_ORDER:
         resolve = getattr(fw, "resolve_observation_type_fallback", None)
         if resolve is None:
             continue
@@ -437,7 +435,19 @@ def _resolve_observation_type(span: Any, span_attrs: dict, model: Any) -> str:
 
 
 def _resolve_provider(span_attrs: dict) -> Optional[str]:
-    """Return the provider/system id from the first PROVIDER_ATTRS hit."""
+    """Return the provider/system id.
+
+    Adapter-specific ``resolve_provider`` hooks fire first (e.g. Vercel's
+    dotted-value normalisation); otherwise falls through to the first
+    PROVIDER_ATTRS hit.
+    """
+    for fw in FRAMEWORKS:
+        resolve = getattr(fw, "resolve_provider", None)
+        if resolve is None:
+            continue
+        resolved = resolve(span_attrs)
+        if resolved:
+            return resolved
     for attr in PROVIDER_ATTRS:
         val = span_attrs.get(attr)
         if val is None:
@@ -449,9 +459,9 @@ def _resolve_provider(span_attrs: dict) -> Optional[str]:
 def _build_model_parameters(span_attrs: dict) -> Any:
     """Compose a merged ``model_parameters`` value.
 
-    Blob sources (Langfuse v3/v4, OpenInference) parsed first; flat
-    ``gen_ai.request.*`` attrs (otel_genai) added for any key still missing;
-    Vercel ``ai.request.*`` camelCase attrs remapped to snake_case similarly.
+    Blob sources (Langfuse v3/v4) parsed first; flat ``gen_ai.request.*``
+    attrs (otel_genai) added for any key still missing; Vercel
+    ``ai.request.*`` camelCase attrs remapped to snake_case similarly.
     Falls back to the legacy first-match string when nothing else resolved.
     """
     merged: dict[str, Any] = {}

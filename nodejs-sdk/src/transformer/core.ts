@@ -396,6 +396,11 @@ function resolveObservationType(
 }
 
 function resolveProvider(spanAttrs: Record<string, unknown>): string | null {
+  for (const fw of FRAMEWORKS) {
+    if (!fw.resolveProvider) continue;
+    const resolved = fw.resolveProvider(spanAttrs);
+    if (resolved) return resolved;
+  }
   for (const attr of PROVIDER_ATTRS) {
     const val = spanAttrs[attr];
     if (val === undefined || val === null) continue;

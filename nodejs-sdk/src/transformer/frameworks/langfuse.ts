@@ -21,14 +21,22 @@ const METADATA_PREFIXES = [
   "langfuse.observation.metadata.",
 ] as const;
 
+// Both underscore (`prompt_id`, `prompt_name`, `prompt_version`) and dotted
+// (`prompt.id`, `prompt.name`, `prompt.version`) forms have appeared across
+// Langfuse SDK versions and docs; accept both.
 export const COMPLETION_START_ATTRS = ["langfuse.observation.completion_start_time"] as const;
-export const PROMPT_ID_ATTRS = ["langfuse.observation.prompt_id"] as const;
+export const PROMPT_ID_ATTRS = [
+  "langfuse.observation.prompt_id",
+  "langfuse.observation.prompt.id",
+] as const;
 export const PROMPT_NAME_ATTRS = [
   "langfuse.observation.prompt_name",
+  "langfuse.observation.prompt.name",
   "langfuse.prompt.name",
 ] as const;
 export const PROMPT_VERSION_ATTRS = [
   "langfuse.observation.prompt_version",
+  "langfuse.observation.prompt.version",
   "langfuse.prompt.version",
 ] as const;
 

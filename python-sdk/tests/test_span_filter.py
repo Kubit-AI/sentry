@@ -60,6 +60,8 @@ class TestIsKnownLLMInstrumentor:
             "kubit-sdk",
             "langfuse-sdk",
             "langfuse-sdk.generation",
+            "ai",
+            "ai.vercel",
         ],
     )
     def test_matches(self, scope):
@@ -68,24 +70,6 @@ class TestIsKnownLLMInstrumentor:
     @pytest.mark.parametrize(
         "scope",
         [
-            # Previously in the broad allow-list — now rejected.
-            "openinference",
-            "openinference.instrumentation.openai",
-            "langsmith",
-            "litellm",
-            "ai",
-            "ai.vercel",
-            "braintrust",
-            "logfire",
-            "opentelemetry.instrumentation.openai",
-            "opentelemetry.instrumentation.anthropic",
-            "opentelemetry.instrumentation.bedrock",
-            "vllm",
-            "opentelemetry.instrumentation.openai_agents",
-            "opentelemetry.instrumentation.openai_agents.sub",
-            "traceloop.tracer",
-            "@traceloop/node-server-sdk",
-            # Boundary + generic
             "langfuse-sdkx",                    # boundary — not a prefix match
             "opentelemetry.instrumentation.fastapi",
             "opentelemetry.instrumentation.requests",

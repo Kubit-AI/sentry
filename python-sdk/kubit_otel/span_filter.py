@@ -41,7 +41,39 @@ ShouldExportSpan = Callable[[ReadableSpan], bool]
 KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES = frozenset(
     {
         KUBIT_TRACER_NAME,
+        # Langfuse's default allow-list — kept for apps that instrument with
+        # the Langfuse SDK or any of the upstream frameworks it supports.
         "langfuse-sdk",
+        "agent_framework",
+        "ai",                                      # Vercel AI SDK
+        "haystack",
+        "langsmith",
+        "openinference",                           # Arize / OpenInference Python emitters
+        "@arizeai/openinference",                  # OpenInference JS / npm emitters (parity with Node)
+        "opentelemetry.instrumentation.anthropic",
+        "strands-agents",
+        "vllm",
+        # Additional scopes this project's transformer aliases per CLAUDE.md
+        # (Braintrust, Logfire, OpenLLMetry/Traceloop family, OpenAI Agents).
+        "braintrust",
+        "logfire",
+        "opentelemetry.instrumentation.openai",
+        "opentelemetry.instrumentation.bedrock",
+        "opentelemetry.instrumentation.vertexai",
+        "opentelemetry.instrumentation.google_generativeai",
+        "opentelemetry.instrumentation.cohere",
+        "opentelemetry.instrumentation.mistralai",
+        "opentelemetry.instrumentation.groq",
+        "opentelemetry.instrumentation.ollama",
+        "opentelemetry.instrumentation.together",
+        "opentelemetry.instrumentation.replicate",
+        # OpenAI Agents SDK — opentelemetry-instrumentation-openai-agents-v2
+        # emits under this scope. Trailing ``_agents`` keeps it distinct from
+        # ``opentelemetry.instrumentation.openai``.
+        "opentelemetry.instrumentation.openai_agents",
+        # Traceloop / OpenLLMetry SDK workflow + task decorator spans.
+        "traceloop.tracer",                        # Python SDK tracer name
+        "@traceloop",                              # JS SDK package prefix (parity with Node)
     }
 )
 
@@ -65,7 +97,12 @@ def is_genai_span(span: ReadableSpan) -> bool:
 
 
 def _matches_scope_prefix(scope_name: str, prefix: str) -> bool:
-    return scope_name == prefix or scope_name.startswith(f"{prefix}.")
+    return (
+        scope_name == prefix
+        or scope_name.startswith(f"{prefix}.")
+        or scope_name.startswith(f"{prefix}-")
+        or scope_name.startswith(f"{prefix}/")
+    )
 
 
 def is_known_llm_instrumentor(span: ReadableSpan) -> bool:

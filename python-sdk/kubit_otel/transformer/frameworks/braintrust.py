@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from ...helpers import clean_discriminator, safe_float
+from ..helpers import clean_discriminator, safe_float
 
 NAME = "braintrust"
 

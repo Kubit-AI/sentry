@@ -1,7 +1,7 @@
-import { describe, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
-import { isKnownLLMInstrumentor } from "../../../spanFilter";
+import { isKnownLLMInstrumentor } from "./spanFilter";
 
 function makeSpan(opts: {
   scopeName?: string | null;
@@ -19,18 +19,14 @@ function makeSpan(opts: {
   } as unknown as ReadableSpan;
 }
 
-// NOTE: These assertions exercise the BROAD instrumentation-scope allow-list
-// that covered openinference, langsmith, braintrust, logfire, traceloop, the
-// OpenLLMetry vendor family, OpenAI Agents, and Vercel AI. The shipped SDK
-// currently narrows `KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES` to just
-// `["kubit-sdk", "langfuse-sdk"]`, so these cases are kept here as a
-// re-enablement reference only and are skipped.
-describe.skip("isKnownLLMInstrumentor (broad allow-list, currently disabled)", () => {
+// Assertions covering the broad instrumentation-scope allow-list:
+// openinference, langsmith, braintrust, logfire, traceloop, the OpenLLMetry
+// vendor family, OpenAI Agents, and Vercel AI.
+describe("isKnownLLMInstrumentor (broad allow-list)", () => {
   const accepted = [
     "openinference",
     "openinference.instrumentation.openai",
     "langsmith",
-    "litellm",
     "ai",
     "ai.vercel",
     "braintrust",

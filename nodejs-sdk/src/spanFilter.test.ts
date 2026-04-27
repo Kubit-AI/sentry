@@ -55,16 +55,17 @@ describe("isGenAISpan", () => {
 });
 
 describe("isKnownLLMInstrumentor", () => {
-  const accepted = ["kubit-sdk", "langfuse-sdk", "langfuse-sdk.generation"];
+  const accepted = [
+    "kubit-sdk",
+    "langfuse-sdk",
+    "langfuse-sdk.generation",
+    "ai",
+  ];
   const rejected = [
-    "openinference",
-    "langsmith",
-    "braintrust",
-    "logfire",
-    "traceloop.tracer",
-    "opentelemetry.instrumentation.openai_agents",
     "",
     "my_framework",
+    "opentelemetry.instrumentation.requests",
+    "opentelemetry.instrumentation.fastapi",
   ];
   it.each(accepted)("accepts scope %s", (scope) => {
     expect(isKnownLLMInstrumentor(makeSpan({ scopeName: scope }))).toBe(true);

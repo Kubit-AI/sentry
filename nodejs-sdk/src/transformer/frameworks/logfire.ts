@@ -6,7 +6,7 @@
  * `pydantic_ai.all_messages` for multi-agent conversation-state capture.
  */
 
-import { makeAdapter } from "../makeAdapter";
+import { makeAdapter } from "./makeAdapter";
 
 export const adapter = makeAdapter({
   NAME: "logfire",

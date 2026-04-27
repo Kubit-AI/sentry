@@ -10,8 +10,8 @@
  * reconstructing them into a JSON messages array.
  */
 
-import { cleanDiscriminator } from "../../helpers";
-import { makeAdapter } from "../makeAdapter";
+import { cleanDiscriminator } from "../helpers";
+import { makeAdapter } from "./makeAdapter";
 
 const SPAN_KIND_ATTR = "openinference.span.kind";
 const INPUT_INDEX_PREFIX = "llm.input_messages.";

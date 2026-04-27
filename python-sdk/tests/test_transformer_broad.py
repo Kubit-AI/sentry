@@ -1,15 +1,9 @@
-"""Tests for disabled-adapter schemas under :mod:`kubit_otel.transformer`.
+"""Tests for the broad-adapter schemas under :mod:`kubit_otel.transformer`.
 
-These cases cover the seven framework adapters currently parked under
-``kubit_otel/transformer/frameworks/_disabled/`` (braintrust, langsmith,
-logfire, openai_agents, openinference, traceloop, vercel_ai). They are
-kept here as a re-enablement reference — ``pytest tests/`` skips them via
-``norecursedirs = ["_disabled"]`` in ``pyproject.toml``.
-
-Module-level skip: these tests exercise ``transform_spans`` against the
-shipped registry, which does not register the disabled adapters. When
-re-enabling an adapter, move both the adapter file and the matching
-test class back to their non-``_disabled`` locations to make them run.
+Covers the seven framework adapters re-enabled alongside the narrow set
+(braintrust, langsmith, logfire, openai_agents, openinference, traceloop,
+vercel_ai) — exercises ``transform_spans`` end-to-end against vendor-specific
+attribute fixtures.
 """
 
 from __future__ import annotations
@@ -21,11 +15,6 @@ import pytest
 from opentelemetry.trace import SpanKind, StatusCode
 
 from kubit_otel.transformer import transform_spans
-
-pytestmark = pytest.mark.skip(
-    reason="disabled-adapter reference suite — re-enable the target adapter in "
-    "kubit_otel.transformer.registry.FRAMEWORKS before running these tests."
-)
 
 
 def _mock_span(
@@ -442,67 +431,6 @@ class TestObservationTypePassThroughDisabled:
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "CHAIN"
-
-
-class TestVercelAiRawSchema:
-    """Vercel AI SDK apps that ship raw ``ai.*`` without the ai-sdk-otel-adapter.
-
-    Exercises model/input/output/usage/provider/params extraction purely from
-    the Vercel-native attribute namespace.
-    """
-
-    def _attrs(self):
-        return {
-            "ai.model.provider": "amazon-bedrock.claude-3-5",
-            "ai.model.id": "claude-3-5-sonnet-20241022",
-            "ai.response.model": "claude-3-5-sonnet-20241022-v1:0",
-            "ai.prompt": "hello",
-            "ai.response": "hi there",
-            "ai.usage.promptTokens": 12,
-            "ai.usage.completionTokens": 4,
-            "ai.request.temperature": 0.3,
-            "ai.request.topP": 0.9,
-            "ai.request.maxTokens": 256,
-            "ai.request.stopSequences": ["\n\n"],
-        }
-
-    def test_ai_response_model_preferred_for_model(self):
-        span = _mock_span(scope_name="ai", attributes=self._attrs())
-        [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["model"] == "claude-3-5-sonnet-20241022-v1:0"
-
-    def test_ai_prompt_and_response_mapped_to_input_output(self):
-        span = _mock_span(attributes=self._attrs())
-        [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == "hello"
-        assert obs["output"] == "hi there"
-
-    def test_ai_usage_camelcase_tokens(self):
-        span = _mock_span(attributes=self._attrs())
-        [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["usage_details"]["input"] == 12
-        assert obs["usage_details"]["output"] == 4
-        assert obs["usage_details"]["total"] == 16
-
-    def test_ai_model_provider_normalised_to_aws_bedrock(self):
-        span = _mock_span(attributes=self._attrs())
-        [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["provider"] == "aws_bedrock"
-
-    def test_ai_request_params_remapped_to_snake_case(self):
-        span = _mock_span(attributes=self._attrs())
-        [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["model_parameters"] == {
-            "temperature": 0.3,
-            "top_p": 0.9,
-            "max_tokens": 256,
-            "stop_sequences": ["\n\n"],
-        }
-
-    def test_ai_model_provider_unknown_prefix_passes_through(self):
-        span = _mock_span(attributes={"ai.model.provider": "xai.grok-1"})
-        [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["provider"] == "xai"
 
 
 class TestIndexedMessageUnpacking:

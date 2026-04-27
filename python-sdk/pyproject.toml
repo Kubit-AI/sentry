@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kubit-otel"
-version = "0.4.0"
+version = "0.5.0"
 description = "OpenTelemetry exporter for Kubit analytics."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -58,8 +58,6 @@ Documentation = "https://docs.kubit.ai"
 
 [tool.setuptools.packages.find]
 include = ["kubit_otel*"]
-exclude = ["kubit_otel.transformer.frameworks._disabled*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["_disabled"]

@@ -10,6 +10,6 @@
  * canonical alias concatenation order.
  */
 
-import { makeAdapter } from "../makeAdapter";
+import { makeAdapter } from "./makeAdapter";
 
 export const adapter = makeAdapter({ NAME: "openai_agents" });

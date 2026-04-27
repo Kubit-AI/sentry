@@ -43,6 +43,13 @@ TIME_TO_FIRST_TOKEN_ATTRS: tuple[str, ...] = ()
 TOOL_CALLS_ATTRS = ("langfuse.observation.tool_calls",)
 TOOL_CALL_NAMES_ATTRS = ("langfuse.observation.tool_call_names",)
 TOOL_DEFINITIONS_ATTRS = ("langfuse.observation.tool_definitions",)
+
+# Langfuse lets apps set environment/release as span attrs (not resource attrs);
+# core consults these before falling back to ``deployment.environment`` /
+# ``service.version``.
+ENVIRONMENT_ATTRS = ("langfuse.environment",)
+RELEASE_ATTRS = ("langfuse.release",)
+
 PROVIDER_ATTRS: tuple[str, ...] = ()
 AGENT_NAME_ATTRS: tuple[str, ...] = ()
 AGENT_ID_ATTRS: tuple[str, ...] = ()
@@ -51,10 +58,24 @@ TOOL_NAME_ATTRS: tuple[str, ...] = ()
 SYSTEM_INSTRUCTIONS_ATTRS: tuple[str, ...] = ()
 
 # Langfuse-specific extras (first-match string fallbacks).
+# Both underscore (``prompt_id``, ``prompt_name``, ``prompt_version``) and
+# dotted (``prompt.id``, ``prompt.name``, ``prompt.version``) forms have
+# appeared across Langfuse SDK versions and docs; accept both.
 COMPLETION_START_ATTRS = ("langfuse.observation.completion_start_time",)
-PROMPT_ID_ATTRS = ("langfuse.observation.prompt_id",)
-PROMPT_NAME_ATTRS = ("langfuse.observation.prompt_name", "langfuse.prompt.name")
-PROMPT_VERSION_ATTRS = ("langfuse.observation.prompt_version", "langfuse.prompt.version")
+PROMPT_ID_ATTRS = (
+    "langfuse.observation.prompt_id",
+    "langfuse.observation.prompt.id",
+)
+PROMPT_NAME_ATTRS = (
+    "langfuse.observation.prompt_name",
+    "langfuse.observation.prompt.name",
+    "langfuse.prompt.name",
+)
+PROMPT_VERSION_ATTRS = (
+    "langfuse.observation.prompt_version",
+    "langfuse.observation.prompt.version",
+    "langfuse.prompt.version",
+)
 
 CACHE_TOKEN_MAP: tuple[tuple[str, str], ...] = ()
 

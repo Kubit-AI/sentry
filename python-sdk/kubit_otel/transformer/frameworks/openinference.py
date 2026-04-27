@@ -4,9 +4,11 @@ Uses the ``llm.*`` namespace rather than ``gen_ai.*``. ``openinference.span.kind
 is the authoritative span-kind discriminator. Embedding spans carry the model
 under ``embedding.model_name`` rather than ``llm.model_name``.
 
-Also handles indexed message flattening: ``llm.input_messages.<n>.message.role``
-and ``llm.input_messages.<n>.message.content`` (and the output equivalents),
-reconstructing them into a JSON messages array.
+Handles indexed message flattening: ``llm.input_messages.<n>.message.role``,
+``llm.input_messages.<n>.message.content`` (and output equivalents),
+reconstructing them into a JSON messages array. Retriever spans encode RAG hits
+as ``retrieval.documents.<n>.document.<field>`` which are unpacked into the
+output slot when no ``llm.output_messages`` are present.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from ...helpers import clean_discriminator, merge_json_blob
+from ..helpers import clean_discriminator
 
 NAME = "openinference"
 
@@ -26,10 +28,8 @@ MODEL_ATTRS = (
 PROVIDED_MODEL_ATTRS = ("llm.request.model",)
 
 INPUT_ATTRS = (
-    # Non-indexed forms. Indexed `llm.input_messages.<n>.*` unpacked separately.
     "llm.input_messages",
     "llm.prompts",
-    # OpenInference flat raw value when `input.mime_type` is set.
     "input.value",
 )
 OUTPUT_ATTRS = (
@@ -57,7 +57,6 @@ TOTAL_COST_ATTRS = ("llm.cost.total",)
 
 SESSION_ID_ATTRS: tuple[str, ...] = ()
 USER_ID_ATTRS: tuple[str, ...] = ()
-# OpenInference tag attribute (comma-separated string or JSON array).
 TAGS_ATTRS = ("tag.tags",)
 
 TIME_TO_FIRST_TOKEN_ATTRS = ("llm.time_to_first_token",)
@@ -65,8 +64,6 @@ TOOL_CALLS_ATTRS: tuple[str, ...] = ()
 TOOL_CALL_NAMES_ATTRS: tuple[str, ...] = ()
 TOOL_DEFINITIONS_ATTRS: tuple[str, ...] = ()
 
-# Provider identification — OpenInference splits system vs provider but both
-# carry the same conceptual value ("openai", "anthropic", ...).
 PROVIDER_ATTRS = (
     "llm.system",
     "llm.provider",
@@ -120,11 +117,6 @@ def unpack_messages(span_attrs: dict) -> tuple[Optional[str], Optional[str]]:
 
 
 def _unpack_retrieval_docs(span_attrs: dict) -> Optional[str]:
-    """Reconstruct a document array from ``retrieval.documents.<n>.document.<field>``.
-
-    Strips the constant ``document.`` segment and emits
-    ``{content, id, score, metadata}`` objects ordered by index.
-    """
     docs: dict[int, dict[str, Any]] = {}
     prefix_len = len(_RETRIEVAL_DOCS_PREFIX)
     for key, value in span_attrs.items():
@@ -153,8 +145,6 @@ def _unpack_indexed(span_attrs: dict, prefix: str) -> Optional[str]:
         if not isinstance(key, str) or not key.startswith(prefix):
             continue
         rest = key[prefix_len:]
-        # Expected suffix forms: "<idx>.message.role", "<idx>.message.content",
-        # "<idx>.message.tool_calls.<tidx>.<field>" (latter flattened further).
         parts = rest.split(".", 1)
         if len(parts) < 2:
             continue
@@ -166,8 +156,7 @@ def _unpack_indexed(span_attrs: dict, prefix: str) -> Optional[str]:
         if not inner.startswith("message."):
             continue
         field = inner[len("message."):]
-        msg = messages.setdefault(idx, {})
-        msg[field] = value
+        messages.setdefault(idx, {})[field] = value
     if not messages:
         return None
     ordered = [messages[i] for i in sorted(messages)]
