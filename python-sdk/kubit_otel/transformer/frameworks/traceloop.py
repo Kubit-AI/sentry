@@ -16,8 +16,7 @@ from typing import Any, Optional
 from ..helpers import clean_discriminator
 from ..messages import (
     coerce_to_messages,
-    stringify_for_text,
-    text_message,
+    langchain_envelope_to_canonical,
     unpack_indexed_messages,
 )
 
@@ -136,10 +135,10 @@ def normalize_messages(span_attrs: dict) -> dict | None:
     indexed_out = unpack_indexed_messages(span_attrs, _COMPLETION_INDEX_PREFIX, "")
 
     input_msgs = indexed_in or _entity_to_messages(
-        span_attrs.get("traceloop.entity.input"), "user"
+        span_attrs.get("traceloop.entity.input")
     )
     output_msgs = indexed_out or _entity_to_messages(
-        span_attrs.get("traceloop.entity.output"), "assistant"
+        span_attrs.get("traceloop.entity.output")
     )
 
     if input_msgs is None and output_msgs is None:
@@ -147,13 +146,24 @@ def normalize_messages(span_attrs: dict) -> dict | None:
     return {"input": input_msgs, "output": output_msgs}
 
 
-def _entity_to_messages(raw: Any, role: str) -> Optional[list]:
+def _entity_to_messages(raw: Any) -> Optional[list]:
+    """Translate a ``traceloop.entity.input`` / ``traceloop.entity.output``
+    JSON blob into canonical messages.
+
+    The blob is OpenLLMetry's opaque ``@workflow`` / ``@task`` decorator
+    payload; sometimes it carries real messages (LangGraph workflow input/
+    output: ``{inputs|outputs: {messages: [...]}}``), sometimes it's an
+    arbitrary entity I/O record (``{input_str, tags, metadata}``). Return
+    canonical only when we can extract a real message array — never synthesize
+    a fake ``[{role:"user", parts:[text:<blob>]}]`` envelope, which would
+    misrepresent a non-conversational entity blob as a chat message.
+    """
     if raw is None:
         return None
     coerced = coerce_to_messages(raw)
     if coerced:
         return coerced
-    text = stringify_for_text(raw)
-    if not text:
-        return None
-    return [text_message(role, text)]
+    lc = langchain_envelope_to_canonical(raw)
+    if lc:
+        return lc
+    return None

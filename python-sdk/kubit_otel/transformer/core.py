@@ -30,7 +30,6 @@ from .messages import (
     canonicalize_gen_ai_events,
     safe_json_parse,
     stringify_for_text,
-    text_message,
     text_part,
 )
 from .registry import DISCRIMINATOR_ORDER, FRAMEWORKS
@@ -493,11 +492,16 @@ def _resolve_canonical_messages(span_attrs: dict, span: Any) -> dict:
       2. Span-event fallback for emitters that put messages on
          ``gen_ai.user.message`` / ``gen_ai.choice`` / etc. events rather than
          attributes.
-      3. Best-effort text-wrap of the legacy ``_resolve_input``/``_resolve_output``
-         result for adapters that contribute INPUT_ATTRS but no normalizer
-         (defensive — every shipped adapter currently has a normalizer).
-      4. ``gen_ai.system_instructions`` injection: prepended as the leading
+      3. ``gen_ai.system_instructions`` injection: prepended as the leading
          ``role: "system"`` message when not already present at head of input.
+
+    No fallback text-wraps the legacy raw INPUT_ATTRS / OUTPUT_ATTRS value:
+    those attrs may carry opaque entity blobs (e.g. ``traceloop.entity.input``
+    with ``{inputs, tags, metadata, kwargs}``), and synthesizing a single fake
+    ``[{role:"user", parts:[text:<blob>]}]`` envelope misrepresents non-
+    conversational data as a chat turn. Adapters that want a text fallback
+    (e.g. legacy ``gen_ai.prompt`` strings) emit it from their own
+    ``normalize_messages`` hook.
     """
     input_msgs: Optional[list] = None
     output_msgs: Optional[list] = None
@@ -522,19 +526,6 @@ def _resolve_canonical_messages(span_attrs: dict, span: Any) -> dict:
             input_msgs = ev["input"]
         if output_msgs is None:
             output_msgs = ev["output"]
-
-    if input_msgs is None:
-        legacy = _resolve_input(span_attrs)
-        if legacy is not None:
-            text = stringify_for_text(legacy)
-            if text:
-                input_msgs = [text_message("user", text)]
-    if output_msgs is None:
-        legacy = _resolve_output(span_attrs)
-        if legacy is not None:
-            text = stringify_for_text(legacy)
-            if text:
-                output_msgs = [text_message("assistant", text)]
 
     sys_msg = _parse_system_instructions(span_attrs.get("gen_ai.system_instructions"))
     if sys_msg is not None:

@@ -129,6 +129,48 @@ describe("otelGenai normalizer", () => {
       },
     ]);
   });
+
+  // OpenLLMetry / Traceloop's LangChain instrumentation serializes Anthropic-
+  // style content arrays containing `tool_use` blocks by stringifying each
+  // block into a TextPart while ALSO emitting a parallel `tool_call` part.
+  // Drop the redundant text mirror; keep the structured tool_call.
+  it("dedupes stringified tool_use TextPart paired with tool_call", () => {
+    const span = makeSpan({
+      attrs: {
+        "gen_ai.output.messages": JSON.stringify([
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "text",
+                content: JSON.stringify({
+                  id: "toolu_X",
+                  input: { a: 1, b: 2 },
+                  name: "add",
+                  type: "tool_use",
+                }),
+              },
+              {
+                type: "tool_call",
+                id: "toolu_X",
+                name: "add",
+                arguments: { a: 1, b: 2 },
+              },
+            ],
+          },
+        ]),
+      },
+    });
+    const r = obs(transformSpans([span], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "tool_call", id: "toolu_X", name: "add", arguments: { a: 1, b: 2 } },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("openinference normalizer", () => {
@@ -344,6 +386,94 @@ describe("openinference normalizer (LangChain envelope)", () => {
       { role: "assistant", parts: [{ type: "text", content: "hello" }] },
     ]);
   });
+
+  // LangChain JS LLMResult shape: `output.value` is wrapped as
+  // {generations: [[{text, message: <Serializable AIMessage>}, ...]], llmOutput}.
+  // Without unwrapping, the indexed-flat fallback (`llm.output_messages.0.message.role`)
+  // produces an empty assistant message because the AIMessage's content is a
+  // tool_use array, not a string.
+  it("unwraps LangChain LLMResult `generations` wrapper for output.value", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "llm.output_messages.0.message.role": "assistant",
+      "output.value": JSON.stringify({
+        generations: [
+          [{
+            text: "",
+            message: lcMsg("AIMessage", {
+              content: [
+                { type: "tool_use", id: "toolu_X", name: "add", input: { a: 47, b: 38 } },
+              ],
+            }),
+          }],
+        ],
+        llmOutput: { model: "claude-sonnet-4-5" },
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "tool_call", id: "toolu_X", name: "add", arguments: { a: 47, b: 38 } },
+        ],
+      },
+    ]);
+  });
+
+  // LangChain JS BaseChatModel.invoke uses a batch convention: `messages` is
+  // BaseMessage[][] (each outer slot = one conversation in the batch). For
+  // single-conversation invocations the outer array still wraps the inner
+  // turn list. Flatten one level so the inner Serializables are translated.
+  it("flattens LangChain JS double-array `messages: [[...]]` nesting", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "input.value": JSON.stringify({
+        messages: [[
+          lcMsg("HumanMessage", { content: "What is 47 + 38?" }),
+          lcMsg("AIMessage", {
+            content: [
+              { type: "tool_use", id: "toolu_X", name: "add", input: { a: 47, b: 38 } },
+            ],
+          }),
+          lcMsg("ToolMessage", { content: "85", tool_call_id: "toolu_X", name: "add" }),
+        ]],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
+      {
+        role: "assistant",
+        parts: [
+          { type: "tool_call", id: "toolu_X", name: "add", arguments: { a: 47, b: 38 } },
+        ],
+      },
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", id: "toolu_X", response: "85" }],
+        name: "add",
+      },
+    ]);
+  });
+
+  // Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing
+  // {output:[{lg_name:"Send",...}]}) used to be text-wrapped into a fake
+  // `[{role:"assistant", parts:[{type:"text", content:"<entire JSON blob>"}]}]`.
+  // Mirror the call we made on Traceloop entity blobs: return null canonical;
+  // the raw `output` field still carries the blob for debugging.
+  it("returns null canonical for non-conversational CHAIN output blobs", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "chain",
+      "output.value": JSON.stringify({
+        output: [
+          { lg_name: "Send", node: "tools", args: { messages: [] } },
+        ],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toBeNull();
+  });
 });
 
 describe("traceloop normalizer", () => {
@@ -360,6 +490,68 @@ describe("traceloop normalizer", () => {
     ]);
     expect(r.output_messages).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "hello" }] },
+    ]);
+  });
+
+  // OpenLLMetry's @workflow / @task decorators dump opaque entity blobs
+  // (`{"inputs":{...},"tags":[...],"metadata":{...}}`) into
+  // `traceloop.entity.input` / `traceloop.entity.output`. Wrapping those into
+  // a single fake `[{role:"user", parts:[text:<blob>]}]` envelope misrepresents
+  // them as a conversational message. Canonical view stays null; consumers
+  // fall back to the raw `input`/`output` string.
+  it("returns null canonical for non-conversational entity blobs", () => {
+    const attrs: Record<string, unknown> = {
+      "traceloop.span.kind": "task",
+      "traceloop.entity.input": JSON.stringify({
+        input_str: "{'a': 47, 'b': 38}",
+        tags: ["seq:step:1"],
+        metadata: { langgraph_node: "tools" },
+      }),
+      "traceloop.entity.output": JSON.stringify({
+        output: { lc: 1, type: "constructor", id: ["x"], kwargs: { v: 1 } },
+        kwargs: { tags: [] },
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toBeNull();
+    expect(r.output_messages).toBeNull();
+  });
+
+  // When the entity blob does carry a real `messages` array (LangGraph
+  // workflow input), unpack it via the LangChain-envelope translator —
+  // including OpenAI-shape `{role,content}` items.
+  it("unpacks LangGraph workflow inputs.{messages} as canonical", () => {
+    const attrs: Record<string, unknown> = {
+      "traceloop.span.kind": "workflow",
+      "traceloop.entity.input": JSON.stringify({
+        inputs: { messages: [{ role: "user", content: "What is 47 + 38?" }] },
+        tags: [],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
+    ]);
+  });
+
+  // Same for outputs (plural) wrapping a {messages:[Serializable,...]} array.
+  it("unpacks LangGraph workflow outputs.{messages: [Serializable]}", () => {
+    const lcAi = (content: string) => ({
+      lc: 1,
+      type: "constructor",
+      id: ["langchain_core", "messages", "AIMessage"],
+      kwargs: { content },
+    });
+    const attrs: Record<string, unknown> = {
+      "traceloop.span.kind": "workflow",
+      "traceloop.entity.output": JSON.stringify({
+        outputs: { messages: [lcAi("47 + 38 = 85")] },
+        kwargs: { tags: [] },
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "47 + 38 = 85" }] },
     ]);
   });
 });

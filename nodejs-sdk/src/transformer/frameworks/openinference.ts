@@ -17,8 +17,6 @@ import {
   genericPart,
   langchainEnvelopeToCanonical,
   safeJsonParse,
-  stringifyForText,
-  textMessage,
   toolCallPart,
   toolCallResponsePart,
   unpackIndexedMessages,
@@ -186,7 +184,7 @@ function langchainBlob(raw: unknown): Message[] | null {
   return langchainEnvelopeToCanonical(parsed);
 }
 
-function blobToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
+function blobToMessages(raw: unknown, _role: "user" | "assistant"): Message[] | null {
   if (raw === undefined || raw === null) return null;
   // 1. LangChain Serializable envelope (richer than coerced OpenAI form) wins.
   const lc = langchainBlob(raw);
@@ -194,10 +192,11 @@ function blobToMessages(raw: unknown, role: "user" | "assistant"): Message[] | n
   // 2. Existing OpenAI-shape coercion.
   const coerced = coerceToMessages(raw);
   if (coerced && coerced.length > 0) return coerced;
-  // 3. Last-resort text wrap.
-  const str = stringifyForText(raw);
-  if (!str) return null;
-  return [textMessage(role, str)];
+  // No text-wrap fallback: a non-conversational JSON blob (e.g. LangGraph's
+  // `{output:[{lg_name:"Send", args:{...}}]}` graph-control envelope on a
+  // routing CHAIN span) shouldn't become a fake `[{role:assistant, parts:[text:<blob>]}]`
+  // chat message. Same call as the Traceloop entity-blob path.
+  return null;
 }
 
 function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {

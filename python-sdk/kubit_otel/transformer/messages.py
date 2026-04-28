@@ -156,12 +156,65 @@ def coerce_to_messages(raw: Any) -> Optional[list]:
             return None
         if isinstance(item.get("parts"), list):
             extras = {k: v for k, v in item.items() if k not in ("role", "parts")}
-            msg: Message = {"role": role, "parts": list(item["parts"])}
+            msg: Message = {
+                "role": role,
+                "parts": _dedupe_tool_use_text_mirror(list(item["parts"])),
+            }
             msg.update(extras)
             out.append(msg)
             continue
         out.append(openai_message_to_canonical(item))
     return out
+
+
+def _dedupe_tool_use_text_mirror(parts: list) -> list:
+    """Drop redundant TextPart mirrors of `tool_use` blocks.
+
+    OpenLLMetry / Traceloop's LangChain instrumentation serializes Anthropic-
+    style assistant ``content`` arrays that contain ``tool_use`` blocks by
+    stringifying each block into a TextPart *and* emitting the parallel
+    structured ``tool_call`` part. The text mirror duplicates information that
+    the structured part already carries, so canonical-passthrough strips it.
+    Keyed on a sibling tool_call with matching ``id`` (or matching ``name``
+    when no id is present).
+    """
+    tool_call_ids: set = set()
+    tool_call_names: set = set()
+    for p in parts:
+        if isinstance(p, dict) and p.get("type") == "tool_call":
+            pid = p.get("id")
+            if isinstance(pid, str):
+                tool_call_ids.add(pid)
+            pname = p.get("name")
+            if isinstance(pname, str):
+                tool_call_names.add(pname)
+    if not tool_call_ids and not tool_call_names:
+        return parts
+
+    kept: list = []
+    for p in parts:
+        if not isinstance(p, dict):
+            kept.append(p)
+            continue
+        if p.get("type") != "text" or not isinstance(p.get("content"), str):
+            kept.append(p)
+            continue
+        parsed = safe_json_parse(p["content"])
+        if not isinstance(parsed, dict):
+            kept.append(p)
+            continue
+        inner_type = parsed.get("type")
+        if inner_type not in ("tool_use", "tool_call"):
+            kept.append(p)
+            continue
+        inner_id = parsed.get("id") if isinstance(parsed.get("id"), str) else None
+        inner_name = parsed.get("name") if isinstance(parsed.get("name"), str) else None
+        if inner_id is not None and inner_id in tool_call_ids:
+            continue
+        if inner_id is None and inner_name is not None and inner_name in tool_call_names:
+            continue
+        kept.append(p)
+    return kept
 
 
 # ── OpenAI message → canonical translation ─────────────────────────────────
@@ -414,11 +467,45 @@ def _unwrap_langchain_envelope(value: Any) -> Optional[list]:
             return None
         return _unwrap_langchain_envelope(parsed)
     if isinstance(value, list):
-        return value if any(_is_langchain_message_serializable(x) for x in value) else None
+        if any(_is_langchain_message_serializable(x) for x in value):
+            return value
+        if value and all(_is_openai_shape_message(x) for x in value):
+            return value
+        return None
     if not isinstance(value, dict):
         return None
     if isinstance(value.get("messages"), list):
-        return value["messages"]
+        msgs = value["messages"]
+        # LangChain JS BaseChatModel.invoke uses a batch convention:
+        # ``messages`` is BaseMessage[][] (each outer slot = one conversation
+        # in the batch). For single-conversation calls there's still one
+        # outer wrapper around the inner turn list. Flatten one level when
+        # every outer item is itself a list of Serializables.
+        if (
+            msgs
+            and all(
+                isinstance(x, list)
+                and any(_is_langchain_message_serializable(y) for y in x)
+                for x in msgs
+            )
+        ):
+            flat: list = []
+            for x in msgs:
+                flat.extend(x)
+            return flat
+        return msgs
+    # LangChain LLMResult: ``{generations: [[{text, message: <Serializable>}, ...], ...], llmOutput}``.
+    # Each ``generations[i]`` is a list of ``{text, message}`` records — collect
+    # every ``message`` field across the nested structure.
+    if isinstance(value.get("generations"), list):
+        collected: list = []
+        for gen in value["generations"]:
+            inner = gen if isinstance(gen, list) else [gen]
+            for item in inner:
+                if isinstance(item, dict) and "message" in item:
+                    collected.append(item["message"])
+        if any(_is_langchain_message_serializable(x) for x in collected):
+            return collected
     if "output" in value:
         out = value["output"]
         if isinstance(out, list) and any(_is_langchain_message_serializable(x) for x in out):
@@ -427,9 +514,20 @@ def _unwrap_langchain_envelope(value: Any) -> Optional[list]:
             return [out]
     if "input" in value:
         return _unwrap_langchain_envelope(value["input"])
+    # OpenLLMetry's @workflow / @task entity blobs nest the actual messages
+    # under plural ``inputs`` / ``outputs`` keys (often with sibling ``tags``,
+    # ``metadata``, ``kwargs``). Recurse through them like the singular variants.
+    if "inputs" in value:
+        return _unwrap_langchain_envelope(value["inputs"])
+    if "outputs" in value:
+        return _unwrap_langchain_envelope(value["outputs"])
     if _is_langchain_message_serializable(value):
         return [value]
     return None
+
+
+def _is_openai_shape_message(v: Any) -> bool:
+    return isinstance(v, dict) and isinstance(v.get("role"), str)
 
 
 def langchain_envelope_to_canonical(raw: Any) -> Optional[list]:

@@ -106,6 +106,41 @@ class TestOtelGenaiNormalizer:
             ],
         }]
 
+    # OpenLLMetry / Traceloop's LangChain instrumentation serializes Anthropic-
+    # style content arrays containing ``tool_use`` blocks by stringifying each
+    # block into a TextPart while ALSO emitting a parallel ``tool_call`` part.
+    # Drop the redundant text mirror; keep the structured tool_call.
+    def test_dedupes_stringified_tool_use_text_mirror(self):
+        span = _mock_span(attrs={
+            "gen_ai.output.messages": json.dumps([{
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "text",
+                        "content": json.dumps({
+                            "id": "toolu_X",
+                            "input": {"a": 1, "b": 2},
+                            "name": "add",
+                            "type": "tool_use",
+                        }),
+                    },
+                    {
+                        "type": "tool_call",
+                        "id": "toolu_X",
+                        "name": "add",
+                        "arguments": {"a": 1, "b": 2},
+                    },
+                ],
+            }]),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] == [{
+            "role": "assistant",
+            "parts": [
+                {"type": "tool_call", "id": "toolu_X", "name": "add", "arguments": {"a": 1, "b": 2}},
+            ],
+        }]
+
 
 # ── openinference ──────────────────────────────────────────────────────────
 
@@ -306,6 +341,96 @@ class TestOpeninferenceLangchainEnvelope:
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]},
         ]
 
+    # LangChain JS LLMResult shape: ``output.value`` is wrapped as
+    # ``{generations: [[{text, message: <Serializable AIMessage>}, ...]], llmOutput}``.
+    # Without unwrapping, the indexed-flat fallback (``llm.output_messages.0.message.role``)
+    # produces an empty assistant message because the AIMessage's content is a
+    # tool_use array, not a string.
+    def test_unwraps_llmresult_generations_wrapper(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "llm.output_messages.0.message.role": "assistant",
+            "output.value": json.dumps({
+                "generations": [
+                    [{
+                        "text": "",
+                        "message": _lc_msg("AIMessage", {
+                            "content": [
+                                {"type": "tool_use", "id": "toolu_X", "name": "add",
+                                 "input": {"a": 47, "b": 38}},
+                            ],
+                        }),
+                    }],
+                ],
+                "llmOutput": {"model": "claude-sonnet-4-5"},
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] == [{
+            "role": "assistant",
+            "parts": [
+                {"type": "tool_call", "id": "toolu_X", "name": "add",
+                 "arguments": {"a": 47, "b": 38}},
+            ],
+        }]
+
+    # LangChain JS BaseChatModel.invoke uses a batch convention: ``messages``
+    # is BaseMessage[][] (each outer slot = one conversation in the batch).
+    # For single-conversation invocations the outer array still wraps the
+    # inner turn list. Flatten one level so the inner Serializables are
+    # translated.
+    def test_flattens_double_array_messages(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "input.value": json.dumps({
+                "messages": [[
+                    _lc_msg("HumanMessage", {"content": "What is 47 + 38?"}),
+                    _lc_msg("AIMessage", {
+                        "content": [
+                            {"type": "tool_use", "id": "toolu_X", "name": "add",
+                             "input": {"a": 47, "b": 38}},
+                        ],
+                    }),
+                    _lc_msg("ToolMessage", {
+                        "content": "85", "tool_call_id": "toolu_X", "name": "add",
+                    }),
+                ]],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
+            {
+                "role": "assistant",
+                "parts": [
+                    {"type": "tool_call", "id": "toolu_X", "name": "add",
+                     "arguments": {"a": 47, "b": 38}},
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [{"type": "tool_call_response", "id": "toolu_X", "response": "85"}],
+                "name": "add",
+            },
+        ]
+
+    # Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing
+    # ``{output:[{lg_name:"Send",...}]}``) used to be text-wrapped into a fake
+    # ``[{role:"assistant", parts:[{type:"text", content:"<entire JSON blob>"}]}]``.
+    # Mirror the call we made on Traceloop entity blobs: return null canonical;
+    # the raw ``output`` field still carries the blob for debugging.
+    def test_returns_null_for_non_conversational_chain_blob(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "chain",
+            "output.value": json.dumps({
+                "output": [
+                    {"lg_name": "Send", "node": "tools", "args": {"messages": []}},
+                ],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] is None
+
 
 # ── traceloop ──────────────────────────────────────────────────────────────
 
@@ -324,6 +449,64 @@ class TestTraceloopNormalizer:
         ]
         assert r["output_messages"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
+        ]
+
+    # OpenLLMetry's @workflow / @task decorators dump opaque entity blobs
+    # (``{"inputs":{...},"tags":[...],"metadata":{...}}``) into
+    # ``traceloop.entity.input`` / ``traceloop.entity.output``. Wrapping those
+    # into a single fake ``[{role:"user", parts:[text:<blob>]}]`` envelope
+    # misrepresents them as a conversational message. Canonical view stays
+    # ``None``; consumers fall back to the raw ``input``/``output`` string.
+    def test_returns_null_canonical_for_non_conversational_blobs(self):
+        span = _mock_span(attrs={
+            "traceloop.span.kind": "task",
+            "traceloop.entity.input": json.dumps({
+                "input_str": "{'a': 47, 'b': 38}",
+                "tags": ["seq:step:1"],
+                "metadata": {"langgraph_node": "tools"},
+            }),
+            "traceloop.entity.output": json.dumps({
+                "output": {"lc": 1, "type": "constructor", "id": ["x"], "kwargs": {"v": 1}},
+                "kwargs": {"tags": []},
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] is None
+        assert r["output_messages"] is None
+
+    # When the entity blob does carry a real ``messages`` array (LangGraph
+    # workflow input), unpack it via the LangChain envelope translator —
+    # including OpenAI-shape ``{role,content}`` items.
+    def test_unpacks_inputs_messages_workflow(self):
+        span = _mock_span(attrs={
+            "traceloop.span.kind": "workflow",
+            "traceloop.entity.input": json.dumps({
+                "inputs": {"messages": [{"role": "user", "content": "What is 47 + 38?"}]},
+                "tags": [],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
+        ]
+
+    def test_unpacks_outputs_messages_workflow_serializable(self):
+        lc_ai = {
+            "lc": 1,
+            "type": "constructor",
+            "id": ["langchain_core", "messages", "AIMessage"],
+            "kwargs": {"content": "47 + 38 = 85"},
+        }
+        span = _mock_span(attrs={
+            "traceloop.span.kind": "workflow",
+            "traceloop.entity.output": json.dumps({
+                "outputs": {"messages": [lc_ai]},
+                "kwargs": {"tags": []},
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] == [
+            {"role": "assistant", "parts": [{"type": "text", "content": "47 + 38 = 85"}]},
         ]
 
 

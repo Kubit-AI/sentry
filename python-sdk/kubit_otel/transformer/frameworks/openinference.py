@@ -24,8 +24,6 @@ from ..messages import (
     generic_part,
     langchain_envelope_to_canonical,
     safe_json_parse,
-    stringify_for_text,
-    text_message,
     tool_call_part,
     tool_call_response_part,
     unpack_indexed_messages,
@@ -271,7 +269,7 @@ def _langchain_blob(raw: Any) -> Optional[list]:
     return langchain_envelope_to_canonical(parsed)
 
 
-def _blob_to_messages(raw: Any, role: str) -> Optional[list]:
+def _blob_to_messages(raw: Any, _role: str) -> Optional[list]:
     if raw is None:
         return None
     # 1. LangChain Serializable envelope (richer than coerced OpenAI form) wins.
@@ -282,11 +280,12 @@ def _blob_to_messages(raw: Any, role: str) -> Optional[list]:
     coerced = coerce_to_messages(raw)
     if coerced:
         return coerced
-    # 3. Last-resort text wrap.
-    text = stringify_for_text(raw)
-    if not text:
-        return None
-    return [text_message(role, text)]
+    # No text-wrap fallback: a non-conversational JSON blob (e.g. LangGraph's
+    # ``{output:[{lg_name:"Send", args:{...}}]}`` graph-control envelope on a
+    # routing CHAIN span) shouldn't become a fake
+    # ``[{role:assistant, parts:[text:<blob>]}]`` chat message. Same call as
+    # the Traceloop entity-blob path.
+    return None
 
 
 def _synthesize_tool_span_messages(span_attrs: dict) -> tuple[Optional[list], Optional[list]]:

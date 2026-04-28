@@ -159,13 +159,50 @@ export function coerceToMessages(raw: unknown): Message[] | null {
     if (typeof obj.role !== "string") return null;
     if (Array.isArray(obj.parts)) {
       // Already canonical-shaped — pass through, trust the source.
-      out.push({ role: obj.role, parts: obj.parts as Part[], ...stripCanonicalKeys(obj) });
+      const parts = dedupeToolUseTextMirror(obj.parts as Part[]);
+      out.push({ role: obj.role, parts, ...stripCanonicalKeys(obj) });
       continue;
     }
     // OpenAI-shape: {role, content, tool_calls?, tool_call_id?, name?, ...}
     out.push(openAIMessageToCanonical(obj));
   }
   return out;
+}
+
+/**
+ * OpenLLMetry / Traceloop's LangChain instrumentation serializes Anthropic-
+ * style assistant `content` arrays that contain `tool_use` blocks by
+ * stringifying each block into a TextPart *and* emitting the parallel
+ * structured `tool_call` part. Drop the redundant text mirror so the canonical
+ * view doesn't duplicate the same tool invocation. Keyed on a sibling
+ * tool_call part with matching `id` (or matching `name` when no id present).
+ */
+function dedupeToolUseTextMirror(parts: Part[]): Part[] {
+  const toolCallIds = new Set<string>();
+  const toolCallNames = new Set<string>();
+  for (const p of parts) {
+    if (p && typeof p === "object" && (p as { type?: unknown }).type === "tool_call") {
+      const tc = p as ToolCallRequestPart;
+      if (typeof tc.id === "string") toolCallIds.add(tc.id);
+      if (typeof tc.name === "string") toolCallNames.add(tc.name);
+    }
+  }
+  if (toolCallIds.size === 0 && toolCallNames.size === 0) return parts;
+
+  return parts.filter((p) => {
+    if (!p || typeof p !== "object") return true;
+    const obj = p as Record<string, unknown>;
+    if (obj.type !== "text" || typeof obj.content !== "string") return true;
+    const parsed = safeJsonParse(obj.content);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return true;
+    const inner = parsed as Record<string, unknown>;
+    if (inner.type !== "tool_use" && inner.type !== "tool_call") return true;
+    const innerId = typeof inner.id === "string" ? inner.id : null;
+    const innerName = typeof inner.name === "string" ? inner.name : null;
+    if (innerId !== null && toolCallIds.has(innerId)) return false;
+    if (innerId === null && innerName !== null && toolCallNames.has(innerName)) return false;
+    return true;
+  });
 }
 
 function stripCanonicalKeys(msg: Record<string, unknown>): Partial<Message> {
@@ -443,11 +480,46 @@ function unwrapLangchainEnvelope(value: unknown): unknown[] | null {
     return unwrapLangchainEnvelope(parsed);
   }
   if (Array.isArray(value)) {
-    return value.some(isLangchainMessageSerializable) ? value : null;
+    if (value.some(isLangchainMessageSerializable)) return value;
+    if (value.length > 0 && value.every(isOpenAIShapeMessage)) return value;
+    return null;
   }
   if (typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
-  if (Array.isArray(obj.messages)) return obj.messages;
+  if (Array.isArray(obj.messages)) {
+    // LangChain JS BaseChatModel.invoke uses a batch convention: `messages`
+    // is BaseMessage[][] (each outer slot = one conversation in the batch).
+    // For single-conversation calls there's still one outer wrapper around
+    // the inner turn list. Flatten one level when every outer item is itself
+    // an array of Serializables.
+    if (
+      obj.messages.length > 0 &&
+      obj.messages.every(
+        (x) =>
+          Array.isArray(x) &&
+          (x as unknown[]).some(isLangchainMessageSerializable),
+      )
+    ) {
+      return ([] as unknown[]).concat(...(obj.messages as unknown[][]));
+    }
+    return obj.messages;
+  }
+  // LangChain LLMResult: `{generations: [[{text, message: <Serializable>}, ...], ...], llmOutput}`.
+  // Each `generations[i]` is an array of `{text, message}` records — collect
+  // every `message` field across the nested structure.
+  if (Array.isArray(obj.generations)) {
+    const collected: unknown[] = [];
+    for (const gen of obj.generations as unknown[]) {
+      const inner = Array.isArray(gen) ? gen : [gen];
+      for (const item of inner as unknown[]) {
+        if (item && typeof item === "object") {
+          const msg = (item as Record<string, unknown>).message;
+          if (msg !== undefined) collected.push(msg);
+        }
+      }
+    }
+    if (collected.some(isLangchainMessageSerializable)) return collected;
+  }
   if (obj.output !== undefined) {
     if (Array.isArray(obj.output) && obj.output.some(isLangchainMessageSerializable)) {
       return obj.output;
@@ -455,8 +527,22 @@ function unwrapLangchainEnvelope(value: unknown): unknown[] | null {
     if (isLangchainMessageSerializable(obj.output)) return [obj.output];
   }
   if (obj.input !== undefined) return unwrapLangchainEnvelope(obj.input);
+  // OpenLLMetry's @workflow / @task entity blobs nest the actual messages
+  // under plural `inputs` / `outputs` keys (often with sibling `tags`,
+  // `metadata`, `kwargs`). Recurse through them like the singular variants.
+  if (obj.inputs !== undefined) return unwrapLangchainEnvelope(obj.inputs);
+  if (obj.outputs !== undefined) return unwrapLangchainEnvelope(obj.outputs);
   if (isLangchainMessageSerializable(obj)) return [obj];
   return null;
+}
+
+function isOpenAIShapeMessage(v: unknown): boolean {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    !Array.isArray(v) &&
+    typeof (v as Record<string, unknown>).role === "string"
+  );
 }
 
 export function langchainEnvelopeToCanonical(raw: unknown): Message[] | null {

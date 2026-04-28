@@ -12,8 +12,7 @@
 import { cleanDiscriminator } from "../helpers";
 import {
   coerceToMessages,
-  stringifyForText,
-  textMessage,
+  langchainEnvelopeToCanonical,
   unpackIndexedMessages,
 } from "../messages";
 import type { CanonicalMessages, Message } from "./types";
@@ -94,19 +93,29 @@ export const adapter = makeAdapter({
     const indexedIn = unpackIndexedMessages(attrs, PROMPT_INDEX_PREFIX, "");
     const indexedOut = unpackIndexedMessages(attrs, COMPLETION_INDEX_PREFIX, "");
 
-    const input = indexedIn ?? entityToMessages(attrs["traceloop.entity.input"], "user");
-    const output = indexedOut ?? entityToMessages(attrs["traceloop.entity.output"], "assistant");
+    const input = indexedIn ?? entityToMessages(attrs["traceloop.entity.input"]);
+    const output = indexedOut ?? entityToMessages(attrs["traceloop.entity.output"]);
 
     if (input === null && output === null) return null;
     return { input, output };
   },
 });
 
-function entityToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
+/**
+ * Translate a `traceloop.entity.input` / `traceloop.entity.output` JSON blob
+ * into canonical messages. The blob is OpenLLMetry's opaque
+ * `@workflow`/`@task` decorator payload; sometimes it carries real messages
+ * (LangGraph workflow input/output: `{inputs|outputs: {messages: [...]}}`),
+ * sometimes it's an arbitrary entity I/O record (`{input_str, tags, metadata}`).
+ * Return canonical only when we can extract a real message array — never
+ * synthesize a fake `[{role:user, parts:[text:<blob>]}]` envelope, which would
+ * misrepresent a non-conversational entity blob as a chat message.
+ */
+function entityToMessages(raw: unknown): Message[] | null {
   if (raw === undefined || raw === null) return null;
   const coerced = coerceToMessages(raw);
   if (coerced && coerced.length > 0) return coerced;
-  const str = stringifyForText(raw);
-  if (!str) return null;
-  return [textMessage(role, str)];
+  const lc = langchainEnvelopeToCanonical(raw);
+  if (lc && lc.length > 0) return lc;
+  return null;
 }

@@ -36,7 +36,6 @@ import {
   canonicalizeGenAiEvents,
   safeJsonParse,
   stringifyForText,
-  textMessage,
   textPart,
   type SpanEventLike,
 } from "./messages";
@@ -487,11 +486,16 @@ function unpackGenAiEvents(
  *   2. Span-event fallback for emitters that put messages on
  *      `gen_ai.user.message` / `gen_ai.choice` / etc. events rather than
  *      attributes.
- *   3. Best-effort text-wrap of the legacy `resolveInput`/`resolveOutput`
- *      result for adapters that contribute INPUT_ATTRS but no normalizer
- *      (defensive — every shipped adapter currently has a normalizer).
- *   4. `gen_ai.system_instructions` injection: prepended as the leading
+ *   3. `gen_ai.system_instructions` injection: prepended as the leading
  *      `role: "system"` message when not already present at the head of input.
+ *
+ * No fallback text-wraps the legacy raw `INPUT_ATTRS` / `OUTPUT_ATTRS` value:
+ * those attrs may carry opaque entity blobs (e.g. `traceloop.entity.input`
+ * with `{inputs, tags, metadata, kwargs}`), and synthesizing a single fake
+ * `[{role:user, parts:[text:<blob>]}]` envelope misrepresents non-
+ * conversational data as a chat turn. Adapters that want a text fallback
+ * (e.g. legacy `gen_ai.prompt` strings) emit it from their own
+ * `normalizeMessages` hook.
  */
 function resolveCanonicalMessages(
   spanAttrs: Record<string, unknown>,
@@ -513,21 +517,6 @@ function resolveCanonicalMessages(
     const ev = canonicalizeGenAiEvents(events);
     if (input === null) input = ev.input;
     if (output === null) output = ev.output;
-  }
-
-  if (input === null) {
-    const legacy = resolveInput(spanAttrs);
-    if (legacy !== undefined && legacy !== null) {
-      const str = stringifyForText(legacy);
-      if (str) input = [textMessage("user", str)];
-    }
-  }
-  if (output === null) {
-    const legacy = resolveOutput(spanAttrs);
-    if (legacy !== undefined && legacy !== null) {
-      const str = stringifyForText(legacy);
-      if (str) output = [textMessage("assistant", str)];
-    }
   }
 
   const sysMsg = parseSystemInstructions(spanAttrs["gen_ai.system_instructions"]);
