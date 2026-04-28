@@ -276,11 +276,11 @@ def _blob_to_messages(raw: Any, _role: str) -> Optional[list]:
         return None
     # 1. LangChain Serializable envelope (richer than coerced OpenAI form) wins.
     lc = _langchain_blob(raw)
-    if lc:
+    if lc is not None and len(lc) > 0:
         return lc
     # 2. Existing OpenAI-shape coercion.
     coerced = coerce_to_messages(raw)
-    if coerced:
+    if coerced is not None and len(coerced) > 0:
         return coerced
     # No text-wrap fallback: a non-conversational JSON blob (e.g. LangGraph's
     # ``{output:[{lg_name:"Send", args:{...}}]}`` graph-control envelope on a
