@@ -398,6 +398,66 @@ describe("span-event fallback", () => {
       },
     ]);
   });
+
+  it("canonicalizes gen_ai.tool.message into a tool_call_response", () => {
+    const span = makeSpan({
+      events: [
+        {
+          name: "gen_ai.user.message",
+          attributes: { content: "what's the weather?" },
+          time: [1_700_000_000, 0],
+        },
+        {
+          name: "gen_ai.tool.message",
+          attributes: { id: "call_42", content: "72F" },
+          time: [1_700_000_000, 1],
+        },
+        {
+          name: "gen_ai.choice",
+          attributes: { content: "It's 72F", finish_reason: "stop" },
+          time: [1_700_000_000, 2],
+        },
+      ],
+    });
+    const r = obs(transformSpans([span], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "what's the weather?" }] },
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "72F", id: "call_42" }],
+      },
+    ]);
+    expect(r.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", content: "It's 72F" }],
+        finish_reason: "stop",
+      },
+    ]);
+  });
+});
+
+describe("cross-adapter resolution", () => {
+  it("takes input from vercelAi and output from langfuse independently", () => {
+    // Locks the doc'd "per-side first-non-null wins" guarantee. Langfuse
+    // (registry position 5) sees the output blob first; vercelAi (position
+    // 8) fills the still-empty input side from `ai.prompt.messages`.
+    const attrs: Record<string, unknown> = {
+      "ai.prompt.messages": JSON.stringify([
+        { role: "user", content: "hi" },
+      ]),
+      "langfuse.observation.output": JSON.stringify([
+        { role: "assistant", content: "hello" },
+      ]),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "hi" }] },
+    ]);
+    expect(r.output_messages).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "hello" }] },
+    ]);
+  });
 });
 
 describe("system_instructions injection", () => {

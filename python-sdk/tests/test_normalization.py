@@ -346,6 +346,57 @@ class TestSpanEventFallback:
             "finish_reason": "stop",
         }]
 
+    def test_canonicalizes_gen_ai_tool_message(self):
+        ev_user = MagicMock()
+        ev_user.name = "gen_ai.user.message"
+        ev_user.attributes = {"content": "what's the weather?"}
+        ev_user.timestamp = 1_700_000_000_000_000_000
+        ev_tool = MagicMock()
+        ev_tool.name = "gen_ai.tool.message"
+        ev_tool.attributes = {"id": "call_42", "content": "72F"}
+        ev_tool.timestamp = 1_700_000_000_000_000_001
+        ev_choice = MagicMock()
+        ev_choice.name = "gen_ai.choice"
+        ev_choice.attributes = {"content": "It's 72F", "finish_reason": "stop"}
+        ev_choice.timestamp = 1_700_000_000_000_000_002
+        span = _mock_span(events=[ev_user, ev_tool, ev_choice])
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "what's the weather?"}]},
+            {
+                "role": "tool",
+                "parts": [{"type": "tool_call_response", "response": "72F", "id": "call_42"}],
+            },
+        ]
+        assert r["output_messages"] == [{
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "It's 72F"}],
+            "finish_reason": "stop",
+        }]
+
+
+# ── Cross-adapter resolution ──────────────────────────────────────────────
+
+
+class TestCrossAdapterResolution:
+    def test_input_from_vercel_output_from_langfuse(self):
+        # Locks the doc'd "per-side first-non-null wins" guarantee. Langfuse
+        # (registry position 5) sees the output blob first; vercel_ai (position
+        # 8) fills the still-empty input side from ``ai.prompt.messages``.
+        span = _mock_span(attrs={
+            "ai.prompt.messages": json.dumps([{"role": "user", "content": "hi"}]),
+            "langfuse.observation.output": json.dumps([
+                {"role": "assistant", "content": "hello"}
+            ]),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
+        ]
+        assert r["output_messages"] == [
+            {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
+        ]
+
 
 # ── System instructions injection ─────────────────────────────────────────
 
