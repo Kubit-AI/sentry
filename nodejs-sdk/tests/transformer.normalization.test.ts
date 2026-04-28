@@ -990,6 +990,126 @@ describe("langfuse normalizer", () => {
       },
     ]);
   });
+
+  // TOOL-span synthesis: a `langfuse.observation.type == "tool"` span carries
+  // structured tool args under `input` and a tool-result envelope under
+  // `output`. Wrap them as a canonical assistant tool_call request +
+  // tool tool_call_response reply, mirroring how the same call appears in
+  // the parent generation's transcript. Lifts tool name and tool_call_id
+  // from the normalized output so input/output stay linked.
+  it("synthesizes assistant tool_call from plain-dict TOOL output", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.type": "tool",
+      "langfuse.observation.input": JSON.stringify({ a: 47, b: 38 }),
+      "langfuse.observation.output": JSON.stringify({
+        content: "85.0",
+        type: "tool",
+        name: "add",
+        tool_call_id: "toolu_X",
+        status: "success",
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "add",
+            id: "toolu_X",
+            arguments: { a: 47, b: 38 },
+          },
+        ],
+      },
+    ]);
+    expect(r.output_messages).toEqual([
+      {
+        role: "tool",
+        name: "add",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "toolu_X",
+            response: "85.0",
+          },
+        ],
+      },
+    ]);
+  });
+
+  // Same synthesis but with a LangChain Serializable ToolMessage envelope on
+  // the output (the JS langfuse-sdk shape). The envelope translator extracts
+  // the same name + tool_call_id; the synthesized input mirrors them.
+  it("synthesizes assistant tool_call from Serializable TOOL output", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.type": "tool",
+      "langfuse.observation.input": JSON.stringify({ a: 47, b: 38 }),
+      "langfuse.observation.output": JSON.stringify({
+        lc: 1,
+        type: "constructor",
+        id: ["langchain_core", "messages", "ToolMessage"],
+        kwargs: {
+          name: "add",
+          tool_call_id: "toolu_Y",
+          content: "85",
+          status: "success",
+        },
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "add",
+            id: "toolu_Y",
+            arguments: { a: 47, b: 38 },
+          },
+        ],
+      },
+    ]);
+    expect(r.output_messages).toEqual([
+      {
+        role: "tool",
+        name: "add",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "toolu_Y",
+            response: "85",
+          },
+        ],
+      },
+    ]);
+  });
+
+  // Output envelope unrecognized (bare-string output): synthesis can't lift
+  // a tool name, so input falls through to existing blobToMessages
+  // text-wrap. Output gets the fallback synthesis -- a tool message with
+  // the raw response and no id linkage.
+  it("falls back to raw-string output wrap when envelope unrecognized", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.type": "tool",
+      "langfuse.observation.input": JSON.stringify({ x: 1 }),
+      "langfuse.observation.output": JSON.stringify("85"),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      {
+        role: "user",
+        parts: [{ type: "text", content: '{"x":1}' }],
+      },
+    ]);
+    expect(r.output_messages).toEqual([
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "85" }],
+      },
+    ]);
+  });
 });
 
 describe("span-event fallback", () => {

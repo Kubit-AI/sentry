@@ -147,8 +147,24 @@ export const adapter = makeAdapter({
     return defs.length > 0 ? defs : null;
   },
   normalizeMessages(attrs): CanonicalMessages | null {
-    let input = blobToMessages(attrs["langfuse.observation.input"], "user");
-    let output = blobToMessages(attrs["langfuse.observation.output"], "assistant");
+    let input: Message[] | null = null;
+    let output: Message[] | null = null;
+
+    // For TOOL spans, synthesize canonical request/response from raw args
+    // + envelope-normalized output. Falls through to blobToMessages when
+    // synthesis can't produce a result (e.g. no recoverable tool name).
+    if (cleanDiscriminator(attrs[OBSERVATION_TYPE_ATTR]) === "tool") {
+      const synth = synthesizeToolSpanMessages(attrs);
+      input = synth.input;
+      output = synth.output;
+    }
+
+    if (input === null) {
+      input = blobToMessages(attrs["langfuse.observation.input"], "user");
+    }
+    if (output === null) {
+      output = blobToMessages(attrs["langfuse.observation.output"], "assistant");
+    }
 
     // Tool-call merge: `langfuse.observation.tool_calls` is a JSON array of
     // `{id, name, arguments}` (or OpenAI shape). Merge into trailing assistant
@@ -242,6 +258,92 @@ function isToolDefinitionMessage(m: unknown): boolean {
     cc.input_schema !== null &&
     typeof cc.input_schema === "object"
   );
+}
+
+/**
+ * For `langfuse.observation.type == "tool"` spans, synthesize canonical
+ * `input_messages` (assistant `tool_call` request) and `output_messages`
+ * (tool `tool_call_response` reply) so they faithfully represent a tool
+ * invocation instead of the default `role:"user"` text-wrap of raw args.
+ *
+ * Strategy:
+ * 1. Parse the output blob and run `langchainEnvelopeToCanonical` on it.
+ *    Both the JS Serializable ToolMessage envelope and the PY plain-dict
+ *    `{type:"tool",...}` shape are recognized by the envelope translator
+ *    (post-Fix #1), producing `[{role:"tool", name, parts:[{type:
+ *    "tool_call_response", id, ...}]}]`.
+ * 2. Lift `name` and the `tool_call_response.id` from the normalized
+ *    output. These become the synthesized assistant tool_call's name + id,
+ *    keeping input/output linked via the same id that the parent
+ *    generation emitted.
+ * 3. Parse args from the input blob (`safeJsonParse` first; fall back to
+ *    the raw string).
+ * 4. Synthesize input only when a tool name was recoverable; otherwise
+ *    return `null` so the caller falls through to `blobToMessages`.
+ * 5. Synthesize output fallback when the envelope didn't yield a tool
+ *    message: wrap the raw output as `[{role:"tool", parts:[
+ *    tool_call_response(rawOutput, null)]}]`. Mirrors the openinference
+ *    adapter's `synthesizeToolSpanMessages`.
+ */
+function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {
+  input: Message[] | null;
+  output: Message[] | null;
+} {
+  const rawOut = attrs["langfuse.observation.output"];
+  if (rawOut === undefined || rawOut === null) {
+    return { input: null, output: null };
+  }
+  const parsedOut = typeof rawOut === "string"
+    ? safeJsonParse(rawOut) ?? rawOut
+    : rawOut;
+
+  let toolName: string | null = null;
+  let toolCallId: string | null = null;
+  let output: Message[] | null = null;
+
+  const lcOut = langchainEnvelopeToCanonical(parsedOut);
+  if (lcOut && lcOut.length > 0) {
+    output = lcOut;
+    const first = lcOut[0];
+    if (first.role === "tool") {
+      if (typeof first.name === "string") toolName = first.name;
+      const part = first.parts[0];
+      if (part && (part as { type?: unknown }).type === "tool_call_response") {
+        const id = (part as { id?: unknown }).id;
+        if (typeof id === "string") toolCallId = id;
+      }
+    }
+  }
+
+  // Output fallback: when envelope didn't produce a tool message but raw
+  // output exists, wrap it as a tool message so consumers still get a
+  // canonical response part (without an id linkage).
+  if (output === null && parsedOut !== null && parsedOut !== undefined) {
+    output = [{
+      role: "tool",
+      parts: [toolCallResponsePart(parsedOut, null)],
+    }];
+  }
+
+  // Input synthesis only fires when we can name the tool.
+  let input: Message[] | null = null;
+  if (toolName !== null) {
+    const rawIn = attrs["langfuse.observation.input"];
+    let argsParsed: unknown;
+    if (rawIn === undefined || rawIn === null) {
+      argsParsed = undefined;
+    } else if (typeof rawIn === "string") {
+      argsParsed = safeJsonParse(rawIn) ?? rawIn;
+    } else {
+      argsParsed = rawIn;
+    }
+    input = [{
+      role: "assistant",
+      parts: [toolCallPart(toolName, argsParsed, toolCallId)],
+    }];
+  }
+
+  return { input, output };
 }
 
 /**
