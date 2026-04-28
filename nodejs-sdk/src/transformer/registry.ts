@@ -9,7 +9,8 @@
  * Ordering rationale:
  *   1. otelGenai     — the standard. Most specific, most authoritative.
  *   2. openinference — large installed base (Arize Phoenix) `llm.*` namespace.
- *   3. generic       — short-name catch-alls (`model`, `input`, `output`).
+ *   3. generic       — short-name catch-alls (`model`, `input`, `output`)
+ *                      kept between OI and Langfuse to preserve pre-refactor priority.
  *   4. langsmith     — `langsmith.*` + token-detail JSON blobs.
  *   5. langfuse      — `langfuse.*` + usage/cost/params JSON blobs.
  *   6. braintrust    — `braintrust.*` JSON payloads + metrics.
