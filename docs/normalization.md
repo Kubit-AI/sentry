@@ -17,7 +17,7 @@ Defined verbatim from the upstream OTel JSON schemas:
 ### Message
 
 ```ts
-type Role = "system" | "user" | "assistant" | "tool" | string;
+type Role = "system" | "developer" | "user" | "assistant" | "tool" | string;
 
 type Message = {
   role: Role;
