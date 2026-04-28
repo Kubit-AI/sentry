@@ -919,6 +919,168 @@ class TestLangfuseNormalizer:
             },
         ]
 
+    # TOOL-span synthesis: a ``langfuse.observation.type == "tool"`` span
+    # carries structured tool args under ``input`` and a tool-result envelope
+    # under ``output``. Wrap them as a canonical assistant tool_call request
+    # + tool tool_call_response reply, mirroring how the same call appears
+    # in the parent generation's transcript. Lifts tool name and
+    # tool_call_id from the normalized output so input/output stay linked.
+    def test_synthesizes_assistant_tool_call_from_plain_dict_tool_output(self):
+        span = _mock_span(attrs={
+            "langfuse.observation.type": "tool",
+            "langfuse.observation.input": json.dumps({"a": 47, "b": 38}),
+            "langfuse.observation.output": json.dumps({
+                "content": "85.0",
+                "type": "tool",
+                "name": "add",
+                "tool_call_id": "toolu_X",
+                "status": "success",
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "name": "add",
+                        "id": "toolu_X",
+                        "arguments": {"a": 47, "b": 38},
+                    },
+                ],
+            },
+        ]
+        assert r["output_messages"] == [
+            {
+                "role": "tool",
+                "name": "add",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "toolu_X",
+                        "response": "85.0",
+                    },
+                ],
+            },
+        ]
+
+    # Same synthesis but with a LangChain Serializable ToolMessage envelope
+    # on the output (the JS langfuse-sdk shape). The envelope translator
+    # extracts the same name + tool_call_id; the synthesized input mirrors
+    # them.
+    def test_synthesizes_assistant_tool_call_from_serializable_tool_output(self):
+        span = _mock_span(attrs={
+            "langfuse.observation.type": "tool",
+            "langfuse.observation.input": json.dumps({"a": 47, "b": 38}),
+            "langfuse.observation.output": json.dumps({
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain_core", "messages", "ToolMessage"],
+                "kwargs": {
+                    "name": "add",
+                    "tool_call_id": "toolu_Y",
+                    "content": "85",
+                    "status": "success",
+                },
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "name": "add",
+                        "id": "toolu_Y",
+                        "arguments": {"a": 47, "b": 38},
+                    },
+                ],
+            },
+        ]
+        assert r["output_messages"] == [
+            {
+                "role": "tool",
+                "name": "add",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "toolu_Y",
+                        "response": "85",
+                    },
+                ],
+            },
+        ]
+
+    # Output envelope unrecognized (bare-string output): synthesis can't
+    # lift a tool name, so input falls through to existing blob_to_messages
+    # text-wrap. Output gets the fallback synthesis -- a tool message with
+    # the raw response and no id linkage.
+    def test_falls_back_to_raw_string_output_wrap_when_envelope_unrecognized(self):
+        span = _mock_span(attrs={
+            "langfuse.observation.type": "tool",
+            "langfuse.observation.input": json.dumps({"x": 1}),
+            "langfuse.observation.output": json.dumps("85"),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {
+                "role": "user",
+                "parts": [{"type": "text", "content": '{"x": 1}'}],
+            },
+        ]
+        assert r["output_messages"] == [
+            {
+                "role": "tool",
+                "parts": [{"type": "tool_call_response", "response": "85"}],
+            },
+        ]
+
+    # PY-only: the Langfuse PY callback serializes tool args via
+    # ``repr(dict)`` (single-quoted), which is invalid JSON. Recover the
+    # parsed dict via ``ast.literal_eval`` so the canonical tool_call's
+    # ``arguments`` field stays parsed (parity with JS, which sees JSON).
+    def test_synthesis_recovers_python_repr_args_via_literal_eval(self):
+        span = _mock_span(attrs={
+            "langfuse.observation.type": "tool",
+            "langfuse.observation.input": "{'a': 47, 'b': 38}",
+            "langfuse.observation.output": json.dumps({
+                "content": "85.0",
+                "type": "tool",
+                "name": "add",
+                "tool_call_id": "toolu_Z",
+                "status": "success",
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "name": "add",
+                        "id": "toolu_Z",
+                        "arguments": {"a": 47, "b": 38},
+                    },
+                ],
+            },
+        ]
+        assert r["output_messages"] == [
+            {
+                "role": "tool",
+                "name": "add",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "toolu_Z",
+                        "response": "85.0",
+                    },
+                ],
+            },
+        ]
+
 
 # ── Span-event fallback ────────────────────────────────────────────────────
 

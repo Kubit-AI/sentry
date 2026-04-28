@@ -9,6 +9,7 @@ and can be promoted to first-level metadata keys.
 
 from __future__ import annotations
 
+import ast
 from typing import Any
 
 from typing import Optional
@@ -180,8 +181,21 @@ def aggregate_tool_definitions(span_attrs: dict) -> Optional[list]:
 
 
 def normalize_messages(span_attrs: dict) -> Optional[dict]:
-    input_msgs = _blob_to_messages(span_attrs.get("langfuse.observation.input"), "user")
-    output_msgs = _blob_to_messages(span_attrs.get("langfuse.observation.output"), "assistant")
+    input_msgs: Optional[list] = None
+    output_msgs: Optional[list] = None
+
+    # For TOOL spans, synthesize canonical request/response from raw args
+    # + envelope-normalized output. Falls through to blob_to_messages when
+    # synthesis can't produce a result (e.g. no recoverable tool name).
+    if clean_discriminator(span_attrs.get(_OBSERVATION_TYPE_ATTR)) == "tool":
+        synth = _synthesize_tool_span_messages(span_attrs)
+        input_msgs = synth["input"]
+        output_msgs = synth["output"]
+
+    if input_msgs is None:
+        input_msgs = _blob_to_messages(span_attrs.get("langfuse.observation.input"), "user")
+    if output_msgs is None:
+        output_msgs = _blob_to_messages(span_attrs.get("langfuse.observation.output"), "assistant")
 
     raw_calls = span_attrs.get("langfuse.observation.tool_calls")
     if raw_calls is not None:
@@ -255,6 +269,96 @@ def _is_tool_definition_message(m: Any) -> bool:
     if not isinstance(c, dict):
         return False
     return isinstance(c.get("name"), str) and isinstance(c.get("input_schema"), dict)
+
+
+def _synthesize_tool_span_messages(attrs: dict) -> dict:
+    """Synthesize canonical request/response messages for a TOOL-typed
+    Langfuse observation.
+
+    Strategy mirrors ``synthesizeToolSpanMessages`` in the JS adapter and
+    the openinference adapter helper of the same name:
+
+    1. Parse the output blob and run ``langchain_envelope_to_canonical`` on
+       it. Both the JS Serializable ToolMessage envelope and the PY
+       plain-dict ``{type:"tool",...}`` shape are recognized by the
+       envelope translator (post-Fix #1), producing
+       ``[{role:"tool", name, parts:[{type:"tool_call_response", id, ...}]}]``.
+    2. Lift ``name`` and the ``tool_call_response.id`` from the normalized
+       output. These become the synthesized assistant tool_call's name +
+       id, keeping input/output linked via the same id that the parent
+       generation emitted.
+    3. Parse args from the input blob: ``safe_json_parse`` first; on
+       failure, ``ast.literal_eval`` (catches the PY-callback ``repr(dict)``
+       quirk -- single-quoted dict literals that aren't valid JSON);
+       fall back to the raw string.
+    4. Synthesize input only when a tool name was recoverable; otherwise
+       return ``None`` so the caller falls through to ``blob_to_messages``.
+    5. Output fallback: when the envelope didn't yield a tool message, wrap
+       the raw output as ``[{role:"tool", parts:[tool_call_response(
+       raw_output, None)]}]``.
+    """
+    raw_out = attrs.get("langfuse.observation.output")
+    if raw_out is None:
+        return {"input": None, "output": None}
+    if isinstance(raw_out, str):
+        parsed_out: Any = safe_json_parse(raw_out)
+        if parsed_out is None:
+            parsed_out = raw_out
+    else:
+        parsed_out = raw_out
+
+    tool_name: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    output: Optional[list] = None
+
+    lc_out = langchain_envelope_to_canonical(parsed_out)
+    if lc_out:
+        output = lc_out
+        first = lc_out[0]
+        if first.get("role") == "tool":
+            name = first.get("name")
+            if isinstance(name, str):
+                tool_name = name
+            parts = first.get("parts", [])
+            if (
+                parts
+                and isinstance(parts[0], dict)
+                and parts[0].get("type") == "tool_call_response"
+            ):
+                pid = parts[0].get("id")
+                if isinstance(pid, str):
+                    tool_call_id = pid
+
+    # Output fallback: when envelope didn't produce a tool message but raw
+    # output exists, wrap it as a tool message so consumers still get a
+    # canonical response part (without an id linkage).
+    if output is None and parsed_out is not None:
+        output = [{
+            "role": "tool",
+            "parts": [tool_call_response_part(parsed_out, None)],
+        }]
+
+    # Input synthesis only fires when we can name the tool.
+    input_msgs: Optional[list] = None
+    if tool_name is not None:
+        raw_in = attrs.get("langfuse.observation.input")
+        if raw_in is None:
+            args_parsed: Any = None
+        elif isinstance(raw_in, str):
+            args_parsed = safe_json_parse(raw_in)
+            if args_parsed is None:
+                try:
+                    args_parsed = ast.literal_eval(raw_in)
+                except (SyntaxError, ValueError):
+                    args_parsed = raw_in
+        else:
+            args_parsed = raw_in
+        input_msgs = [{
+            "role": "assistant",
+            "parts": [tool_call_part(tool_name, args_parsed, tool_call_id)],
+        }]
+
+    return {"input": input_msgs, "output": output}
 
 
 def _rewrite_tool_name_roles(messages: Optional[list]) -> Optional[list]:
