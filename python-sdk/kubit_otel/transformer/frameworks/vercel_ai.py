@@ -132,7 +132,7 @@ def resolve_observation_type(span_attrs: dict) -> str | None:
     if op in ("ai.generateObject", "ai.streamObject"):
         return "AGENT"
     if op in ("ai.embed", "ai.embedMany"):
-        return "EMBEDDING"
+        return "EMBEDDINGS"
     # `.doGenerate` / `.doStream` fall through to otel_genai's `gen_ai.*` handling.
     return None
 

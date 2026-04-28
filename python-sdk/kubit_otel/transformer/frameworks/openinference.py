@@ -108,6 +108,8 @@ def resolve_observation_type(span_attrs: dict) -> str | None:
         return None
     if oi == "llm":
         return "GENERATION"
+    if oi == "embedding":
+        return "EMBEDDINGS"
     return oi.upper()
 
 

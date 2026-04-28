@@ -497,7 +497,7 @@ describe("root + resource mapping", () => {
 });
 
 describe("Observation type pass-through", () => {
-  it("gen_ai.operation.name=embedding maps to EMBEDDING", () => {
+  it("gen_ai.operation.name=embedding (legacy singular) maps to EMBEDDINGS", () => {
     const [obs] = observations(
       transformSpans(
         [makeSpan({ attrs: { "gen_ai.operation.name": "embedding" } })],
@@ -505,7 +505,18 @@ describe("Observation type pass-through", () => {
         "claim",
       ),
     );
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
+  });
+
+  it("gen_ai.operation.name=embeddings (plural, OTel v2 canonical) maps to EMBEDDINGS", () => {
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ attrs: { "gen_ai.operation.name": "embeddings" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
   });
 
   it("gen_ai.operation.name=execute_tool maps to TOOL", () => {
@@ -791,7 +802,7 @@ describe("Vercel AI SDK", () => {
     expect(obs.type).toBe("AGENT");
   });
 
-  it("maps ai.operationId=ai.embed to EMBEDDING", () => {
+  it("maps ai.operationId=ai.embed to EMBEDDINGS", () => {
     const [obs] = observations(
       transformSpans(
         [makeSpan({ scopeName: "ai", attrs: { "ai.operationId": "ai.embed" } })],
@@ -799,7 +810,18 @@ describe("Vercel AI SDK", () => {
         "claim",
       ),
     );
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
+  });
+
+  it("maps ai.operationId=ai.embedMany to EMBEDDINGS", () => {
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ scopeName: "ai", attrs: { "ai.operationId": "ai.embedMany" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
   });
 
   it("doGenerate with tool-use output captures ai.response.toolCalls as output", () => {

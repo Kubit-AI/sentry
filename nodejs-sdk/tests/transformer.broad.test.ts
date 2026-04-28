@@ -730,7 +730,7 @@ describe("OpenInference embedding", () => {
       ),
     );
     expect(obs.model).toBe("text-embedding-3-small");
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
   });
 });
 
@@ -742,7 +742,7 @@ describe("llm.request.type fallback", () => {
     expect(obs.type).toBe("GENERATION");
   });
 
-  it("embedding maps to EMBEDDING", () => {
+  it("embedding maps to EMBEDDINGS", () => {
     const [obs] = observations(
       transformSpans(
         [makeSpan({ attrs: { "llm.request.type": "embedding" } })],
@@ -750,7 +750,7 @@ describe("llm.request.type fallback", () => {
         "claim",
       ),
     );
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
   });
 
   it("rerank maps to WORKFLOW", () => {

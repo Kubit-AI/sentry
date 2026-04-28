@@ -597,7 +597,7 @@ class TestOpenInferenceEmbedding:
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["model"] == "text-embedding-3-small"
-        assert obs["type"] == "EMBEDDING"
+        assert obs["type"] == "EMBEDDINGS"
 
 
 class TestLlmRequestTypeFallback:
@@ -612,7 +612,7 @@ class TestLlmRequestTypeFallback:
     def test_llm_request_type_embedding(self):
         span = _mock_span(attributes={"llm.request.type": "embedding"})
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["type"] == "EMBEDDING"
+        assert obs["type"] == "EMBEDDINGS"
 
     def test_llm_request_type_rerank_maps_to_workflow(self):
         span = _mock_span(attributes={"llm.request.type": "rerank"})

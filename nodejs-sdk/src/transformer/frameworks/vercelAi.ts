@@ -95,7 +95,7 @@ export const adapter = makeAdapter({
     if (op === "ai.toolCall") return "TOOL";
     if (op === "ai.generateText" || op === "ai.streamText") return "AGENT";
     if (op === "ai.generateObject" || op === "ai.streamObject") return "AGENT";
-    if (op === "ai.embed" || op === "ai.embedMany") return "EMBEDDING";
+    if (op === "ai.embed" || op === "ai.embedMany") return "EMBEDDINGS";
     // `.doGenerate` / `.doStream` fall through to the otelGenai adapter's
     // `gen_ai.*` handling (they always carry GenAI semconv attrs).
     return null;

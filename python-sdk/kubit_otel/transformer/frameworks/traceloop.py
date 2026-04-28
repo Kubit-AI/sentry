@@ -67,7 +67,7 @@ _COMPLETION_INDEX_PREFIX = "gen_ai.completion."
 _LLM_REQUEST_TYPE_MAP = {
     "chat": "GENERATION",
     "completion": "GENERATION",
-    "embedding": "EMBEDDING",
+    "embedding": "EMBEDDINGS",
     "rerank": "WORKFLOW",
 }
 

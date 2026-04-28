@@ -113,6 +113,7 @@ export const adapter = makeAdapter({
     const oi = cleanDiscriminator(attrs[SPAN_KIND_ATTR]);
     if (!oi || oi === "unknown") return null;
     if (oi === "llm") return "GENERATION";
+    if (oi === "embedding") return "EMBEDDINGS";
     return oi.toUpperCase();
   },
   resolveProvider(attrs) {

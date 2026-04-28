@@ -26,7 +26,7 @@ const COMPLETION_INDEX_PREFIX = "gen_ai.completion.";
 const LLM_REQUEST_TYPE_MAP: Record<string, string> = {
   chat: "GENERATION",
   completion: "GENERATION",
-  embedding: "EMBEDDING",
+  embedding: "EMBEDDINGS",
   rerank: "WORKFLOW",
 };
 

@@ -133,8 +133,8 @@ def resolve_observation_type(span_attrs: dict) -> str | None:
         return None
     if op in _GENERATION_OPS:
         return "GENERATION"
-    if op == "embedding":
-        return "EMBEDDING"
+    if op in ("embedding", "embeddings"):
+        return "EMBEDDINGS"
     if op == "execute_tool":
         return "TOOL"
     return op.upper()

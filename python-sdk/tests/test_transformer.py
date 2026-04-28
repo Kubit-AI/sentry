@@ -402,10 +402,19 @@ class TestObservationTypePassThrough:
     covered in ``tests/test_transformer_broad.py``.
     """
 
-    def test_gen_ai_operation_embedding_maps_to_embedding(self):
+    def test_gen_ai_operation_embedding_legacy_singular_maps_to_embeddings(self):
         span = _mock_span(attributes={"gen_ai.operation.name": "embedding"})
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["type"] == "EMBEDDING"
+        assert obs["type"] == "EMBEDDINGS"
+
+    def test_gen_ai_operation_embeddings_plural_maps_to_embeddings(self):
+        """OTel GenAI v2 canonical value is plural ``embeddings``; the
+        singular form is the older draft. Both must collapse to the
+        single canonical observation type ``EMBEDDINGS``.
+        """
+        span = _mock_span(attributes={"gen_ai.operation.name": "embeddings"})
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
 
     def test_gen_ai_operation_execute_tool_maps_to_tool(self):
         span = _mock_span(attributes={"gen_ai.operation.name": "execute_tool"})
@@ -610,13 +619,21 @@ class TestVercelAiSdk:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "AGENT"
 
-    def test_embed_maps_to_embedding(self):
+    def test_embed_maps_to_embeddings(self):
         span = _mock_span(
             scope_name="ai",
             attributes={"ai.operationId": "ai.embed"},
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["type"] == "EMBEDDING"
+        assert obs["type"] == "EMBEDDINGS"
+
+    def test_embed_many_maps_to_embeddings(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={"ai.operationId": "ai.embedMany"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
 
     def test_do_generate_with_tool_calls_output(self):
         span = _mock_span(

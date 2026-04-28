@@ -87,7 +87,7 @@ export const adapter = makeAdapter({
     const op = cleanDiscriminator(attrs[OPERATION_NAME_ATTR]);
     if (!op) return null;
     if (GENERATION_OPS.has(op)) return "GENERATION";
-    if (op === "embedding") return "EMBEDDING";
+    if (op === "embedding" || op === "embeddings") return "EMBEDDINGS";
     if (op === "execute_tool") return "TOOL";
     return op.toUpperCase();
   },
