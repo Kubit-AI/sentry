@@ -233,7 +233,11 @@ def _parse_vercel_tool_calls(raw: Any) -> list:
             tc.get("toolCallId") if isinstance(tc.get("toolCallId"), str)
             else (tc.get("id") if isinstance(tc.get("id"), str) else None)
         )
-        args = tc.get("args") if "args" in tc else tc.get("arguments")
+        # Match TS `obj.args ?? obj.arguments`: only fall through when
+        # tc.args is None, not when key present with falsy value.
+        args = tc.get("args")
+        if args is None:
+            args = tc.get("arguments")
         parsed_args = safe_json_parse(args) if isinstance(args, str) else args
         if parsed_args is None and isinstance(args, str):
             parsed_args = args

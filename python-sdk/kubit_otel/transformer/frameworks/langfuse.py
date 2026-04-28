@@ -173,11 +173,17 @@ def _parse_langfuse_tool_calls(raw: Any) -> list:
         if not isinstance(tc, dict):
             continue
         fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
-        name = tc.get("name") or (fn.get("name") if fn else None)
+        # Match TS nullish-coalescing parity: only fall through to fn fields
+        # when tc.name / tc.arguments are None/missing, not when truthy-falsy.
+        name = tc.get("name") if isinstance(tc.get("name"), str) else None
+        if name is None and fn is not None:
+            name = fn.get("name") if isinstance(fn.get("name"), str) else None
         if not isinstance(name, str):
             continue
         call_id = tc.get("id") if isinstance(tc.get("id"), str) else None
-        raw_args = tc.get("arguments") if "arguments" in tc else (fn.get("arguments") if fn else None)
+        raw_args = tc.get("arguments")
+        if raw_args is None and fn is not None:
+            raw_args = fn.get("arguments")
         args = safe_json_parse(raw_args) if isinstance(raw_args, str) else raw_args
         if args is None and isinstance(raw_args, str):
             args = raw_args

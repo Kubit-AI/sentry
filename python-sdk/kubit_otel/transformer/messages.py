@@ -375,7 +375,12 @@ def canonicalize_gen_ai_events(events: Any) -> CanonicalMessages:
         if name == _GEN_AI_OUTPUT_EVENT_NAME:
             ev_role = attrs.get("role") if isinstance(attrs.get("role"), str) else "assistant"
             msg = _event_attrs_to_message(ev_role, attrs)
-            finish = attrs.get("finish_reason") or attrs.get("gen_ai.response.finish_reason")
+            # Match TS `attrs.finish_reason ?? attrs["gen_ai.response.finish_reason"]`:
+            # only fall through when finish_reason is missing (None), not when
+            # key is present with a falsy non-None value.
+            finish = attrs.get("finish_reason")
+            if finish is None:
+                finish = attrs.get("gen_ai.response.finish_reason")
             if isinstance(finish, str):
                 msg["finish_reason"] = finish
             outputs.append((ts, msg))
