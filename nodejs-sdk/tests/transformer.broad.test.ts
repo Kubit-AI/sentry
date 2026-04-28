@@ -873,8 +873,9 @@ describe("OpenInference retrieval documents", () => {
     // Legacy path (unpackMessages)
     expect(obs.output).toBeTruthy();
     expect(JSON.stringify(obs.output)).toContain("Paris is the capital of France.");
-    // Canonical path (normalizeMessages)
-    expect(obs.output_messages).toBeTruthy();
+    // Canonical path (normalizeMessages) — guard against `[]` regression
+    expect(Array.isArray(obs.output_messages)).toBe(true);
+    expect((obs.output_messages as unknown[]).length).toBeGreaterThan(0);
     expect(JSON.stringify(obs.output_messages)).toContain("Paris is the capital of France.");
   });
 });
