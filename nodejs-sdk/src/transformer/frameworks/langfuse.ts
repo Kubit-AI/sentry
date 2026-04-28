@@ -12,12 +12,20 @@
 import { cleanDiscriminator, mergeJsonBlob } from "../helpers";
 import {
   coerceToMessages,
+  langchainEnvelopeToCanonical,
   safeJsonParse,
   stringifyForText,
   textMessage,
   toolCallPart,
+  toolCallResponsePart,
 } from "../messages";
-import type { CanonicalMessages, Message, ToolCallRequestPart } from "./types";
+import type {
+  CanonicalMessages,
+  Message,
+  Part,
+  TextPart,
+  ToolCallRequestPart,
+} from "./types";
 import { makeAdapter } from "./makeAdapter";
 
 const USAGE_BLOB_ATTR = "langfuse.observation.usage_details";
@@ -48,10 +56,23 @@ export const PROMPT_VERSION_ATTRS = [
   "langfuse.prompt.version",
 ] as const;
 
+// LangChain integrations expose richer metadata than Langfuse's first-class
+// fields — they tag spans with the model provider and the resolved model
+// name under `langfuse.observation.metadata.ls_*`. Surface them as
+// first-class `provider` / `provided_model_name` aliases so consumers don't
+// have to dig through the metadata bag.
+const LS_PROVIDER_ATTR = "langfuse.observation.metadata.ls_provider";
+const LS_MODEL_NAME_ATTR = "langfuse.observation.metadata.ls_model_name";
+const LS_INTEGRATION_ATTR = "langfuse.observation.metadata.ls_integration";
+
 export const adapter = makeAdapter({
   NAME: "langfuse",
   MODEL_ATTRS: ["langfuse.observation.model.name", "langfuse.observation.model"],
-  PROVIDED_MODEL_ATTRS: ["langfuse.observation.provided_model_name"],
+  PROVIDED_MODEL_ATTRS: [
+    "langfuse.observation.provided_model_name",
+    LS_MODEL_NAME_ATTR,
+  ],
+  PROVIDER_ATTRS: [LS_PROVIDER_ATTR],
   INPUT_ATTRS: ["langfuse.observation.input"],
   OUTPUT_ATTRS: ["langfuse.observation.output"],
   INPUT_TOKENS_ATTRS: ["langfuse.observation.usage_details.input"],
@@ -79,6 +100,15 @@ export const adapter = makeAdapter({
     const lf = cleanDiscriminator(attrs[OBSERVATION_TYPE_ATTR]);
     if (!lf) return null;
     if (lf === "generation") return "GENERATION";
+    // Langfuse JS SDK emits `span` for LangChain wrapper observations
+    // (LangGraph root, `tools`, `model_request`, `RunnableLambda`, `__start__`),
+    // while the Python SDK emits `chain` for the same logical spans. Fold
+    // back to CHAIN whenever the integration metadata says we're inside a
+    // LangChain run, so cross-SDK observation types stay aligned.
+    if (lf === "span") {
+      const integ = attrs[LS_INTEGRATION_ATTR];
+      if (typeof integ === "string" && integ.startsWith("langchain")) return "CHAIN";
+    }
     return lf.toUpperCase();
   },
   parseUsageBlobs(attrs, usageDetails) {
@@ -98,8 +128,26 @@ export const adapter = makeAdapter({
       }
     }
   },
+  aggregateToolDefinitions(attrs) {
+    // Langfuse-LangChain (Python) injects each tool definition as a phantom
+    // `{role:"tool", content:{name, input_schema, description}}` entry inside
+    // `langfuse.observation.input`. They aren't chat messages — surface them
+    // here so they land in the top-level `tool_definitions` field while the
+    // normalizer drops them from `input_messages`.
+    const raw = attrs["langfuse.observation.input"];
+    if (raw === undefined || raw === null) return null;
+    const parsed = typeof raw === "string" ? safeJsonParse(raw) : raw;
+    if (!Array.isArray(parsed)) return null;
+    const defs: unknown[] = [];
+    for (const m of parsed) {
+      if (isToolDefinitionMessage(m)) {
+        defs.push((m as Record<string, unknown>).content);
+      }
+    }
+    return defs.length > 0 ? defs : null;
+  },
   normalizeMessages(attrs): CanonicalMessages | null {
-    const input = blobToMessages(attrs["langfuse.observation.input"], "user");
+    let input = blobToMessages(attrs["langfuse.observation.input"], "user");
     let output = blobToMessages(attrs["langfuse.observation.output"], "assistant");
 
     // Tool-call merge: `langfuse.observation.tool_calls` is a JSON array of
@@ -121,6 +169,9 @@ export const adapter = makeAdapter({
       }
     }
 
+    input = rewriteToolNameRoles(input);
+    output = rewriteToolNameRoles(output);
+
     if (input === null && output === null) return null;
     return { input, output };
   },
@@ -128,13 +179,115 @@ export const adapter = makeAdapter({
 
 function blobToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
   if (raw === undefined || raw === null) return null;
-  const coerced = coerceToMessages(raw);
+
+  // Parse strings up front so the same pipeline handles stringified and
+  // already-parsed blobs identically.
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    const p = safeJsonParse(raw);
+    if (p === null) return raw.length > 0 ? [textMessage(role, raw)] : null;
+    parsed = p;
+  }
+
+  // Strip phantom tool-definition entries before normalization — they're
+  // surfaced via `aggregateToolDefinitions` instead.
+  if (Array.isArray(parsed)) {
+    const filtered = parsed.filter((m) => !isToolDefinitionMessage(m));
+    parsed = filtered;
+  }
+
+  // LangChain envelope translator handles {messages:[...]}, AIMessage with
+  // content:[{type:"tool_use",...}] arrays, ToolMessage with tool_call_id,
+  // and the OpenAI-shape fallback for non-Serializable arrays.
+  const lc = langchainEnvelopeToCanonical(parsed);
+  if (lc && lc.length > 0) return lc;
+
+  const coerced = coerceToMessages(parsed);
   if (coerced && coerced.length > 0) return coerced;
-  // Non-array JSON / plain string: lossy text wrap so the payload still
-  // surfaces (langfuse.observation.input is intentionally opaque).
+
+  // Single OpenAI-shape object: Langfuse Python serializes the trailing
+  // AIMessage of a tool-use turn as a bare object, not in an array. Wrap
+  // and retry so canonical message extraction still runs.
+  if (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    typeof (parsed as Record<string, unknown>).role === "string"
+  ) {
+    const wrapped = coerceToMessages([parsed]);
+    if (wrapped && wrapped.length > 0) return wrapped;
+  }
+
+  // Lossy text fallback so the payload still surfaces (langfuse.observation.input
+  // is intentionally opaque for non-conversational chains).
   const str = stringifyForText(raw);
-  if (!str) return null;
-  return [textMessage(role, str)];
+  return str ? [textMessage(role, str)] : null;
+}
+
+/**
+ * Drop phantom `{role:"tool", content:{name, input_schema, description}}`
+ * entries that LangChain-Langfuse instrumentation injects alongside real
+ * messages. They're tool *definitions*, not chat turns.
+ */
+function isToolDefinitionMessage(m: unknown): boolean {
+  if (!m || typeof m !== "object") return false;
+  const obj = m as Record<string, unknown>;
+  if (obj.role !== "tool") return false;
+  const c = obj.content;
+  if (!c || typeof c !== "object" || Array.isArray(c)) return false;
+  const cc = c as Record<string, unknown>;
+  return (
+    typeof cc.name === "string" &&
+    cc.input_schema !== undefined &&
+    cc.input_schema !== null &&
+    typeof cc.input_schema === "object"
+  );
+}
+
+/**
+ * The Langfuse JS LangChain integration projects a LangChain ToolMessage as
+ * `{role: <tool_name>, content: <result>}` — using the tool name as the role
+ * with no `tool_call_id` link. Recover the canonical `role:"tool"` +
+ * `tool_call_response` part by rewriting any non-canonical string role to
+ * `"tool"` and lifting the tool_call_id from a same-array assistant
+ * `tool_call` part with the matching name when one is present. Standalone
+ * tool-result spans (e.g. the JS `tools` CHAIN observation, which only
+ * carries the result message) get the rewrite without the linkage.
+ */
+function rewriteToolNameRoles(messages: Message[] | null): Message[] | null {
+  if (!messages || messages.length === 0) return messages;
+  const canonical = new Set(["system", "user", "assistant", "tool"]);
+  const nameToId = new Map<string, string | null>();
+  const out: Message[] = [];
+  for (const m of messages) {
+    if (m.role === "assistant") {
+      for (const p of m.parts) {
+        if ((p as { type?: unknown }).type === "tool_call") {
+          const tc = p as ToolCallRequestPart;
+          if (typeof tc.name === "string") {
+            nameToId.set(tc.name, typeof tc.id === "string" ? tc.id : null);
+          }
+        }
+      }
+      out.push(m);
+      continue;
+    }
+    if (!canonical.has(m.role) && typeof m.role === "string") {
+      const id = nameToId.get(m.role) ?? null;
+      const response =
+        m.parts.length === 1 && (m.parts[0] as { type?: unknown }).type === "text"
+          ? (m.parts[0] as TextPart).content
+          : (m.parts as Part[]);
+      out.push({
+        role: "tool",
+        name: m.role,
+        parts: [toolCallResponsePart(response, id)],
+      });
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
 }
 
 function parseLangfuseToolCalls(raw: unknown): ToolCallRequestPart[] {

@@ -183,6 +183,88 @@ class TestLangfuseV4SpanType:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "AGENT"
 
+    # The Langfuse JS SDK emits ``langfuse.observation.type=span`` for the
+    # LangChain wrapper spans (LangGraph root, ``tools``, ``model_request``,
+    # ``RunnableLambda``, ``__start__``) where the Python SDK emits ``chain``.
+    # Fold the JS literal back to CHAIN when the integration metadata says
+    # we're inside a langchain run, so cross-SDK observation types stay
+    # aligned.
+    def test_type_span_folds_to_chain_when_ls_integration_is_langchain(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "span",
+                "langfuse.observation.metadata.ls_integration": "langchain_create_agent",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "CHAIN"
+
+    def test_type_span_without_langchain_integration_stays_span(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "span",
+                "langfuse.observation.metadata.ls_integration": "openai",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "SPAN"
+
+
+class TestLangfuseProviderModelAliases:
+    def test_populates_provider_from_metadata_ls_provider(self):
+        span = _mock_span(
+            attributes={"langfuse.observation.metadata.ls_provider": "anthropic"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provider"] == "anthropic"
+
+    def test_populates_provided_model_name_from_metadata_ls_model_name(self):
+        span = _mock_span(
+            attributes={"langfuse.observation.metadata.ls_model_name": "claude-sonnet-4-6"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provided_model_name"] == "claude-sonnet-4-6"
+
+    # Confirms that finding #7 (tool-span output stringified as ToolMessage
+    # Serializable JSON-blob) is closed by the langchain envelope routing
+    # already in place from the previous fix. ToolMessage Serializables in
+    # ``langfuse.observation.output`` should produce a clean
+    # ``tool_call_response`` part, lifting the ``tool_call_id`` linkage and
+    # the tool name onto the canonical message.
+    def test_normalizes_toolmessage_serializable_output_to_tool_call_response(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "tool",
+                "langfuse.observation.output": json.dumps({
+                    "lc": 1,
+                    "type": "constructor",
+                    "id": ["langchain_core", "messages", "ToolMessage"],
+                    "kwargs": {
+                        "status": "success",
+                        "content": "85",
+                        "tool_call_id": "toolu_0183unn5QaJzKbi2w9yqPNdq",
+                        "name": "add",
+                        "additional_kwargs": {},
+                        "response_metadata": {},
+                    },
+                }),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["output_messages"] == [
+            {
+                "role": "tool",
+                "name": "add",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "toolu_0183unn5QaJzKbi2w9yqPNdq",
+                        "response": "85",
+                    },
+                ],
+            },
+        ]
+
 
 class TestJsonBlobRobustness:
     def test_malformed_usage_json_is_ignored(self):

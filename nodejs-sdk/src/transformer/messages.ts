@@ -246,12 +246,35 @@ export function openAIMessageToCanonical(msg: Record<string, unknown>): Message 
   }
 
   if (Array.isArray(msg.tool_calls)) {
-    for (const tc of msg.tool_calls as OpenAIToolCall[]) {
-      const name = tc?.function?.name;
-      if (typeof name !== "string") continue;
-      const rawArgs = tc.function?.arguments;
-      const args = typeof rawArgs === "string" ? safeJsonParse(rawArgs) ?? rawArgs : rawArgs;
-      parts.push(toolCallPart(name, args, tc.id ?? null));
+    // Accept both OpenAI shape (`{id, type, function:{name,arguments}}`) and
+    // LangChain shape (`{name, args, id, type:"tool_call"}` — tool_calls
+    // emitted by `@langchain/core` BaseMessage and surfaced in Langfuse-JS
+    // observation blobs).
+    //
+    // Dedup against tool_call parts already produced from `content` (e.g.
+    // Anthropic `{type:"tool_use",...}` blocks): when both exist they
+    // describe the same invocation and would otherwise duplicate.
+    const seenIds = new Set<string>();
+    for (const p of parts) {
+      if ((p as { type?: unknown }).type === "tool_call") {
+        const id = (p as ToolCallRequestPart).id;
+        if (typeof id === "string") seenIds.add(id);
+      }
+    }
+    for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
+      if (!tc || typeof tc !== "object") continue;
+      const fn = tc.function as Record<string, unknown> | undefined;
+      const name =
+        (typeof tc.name === "string" ? (tc.name as string) : null) ??
+        (typeof fn?.name === "string" ? (fn.name as string) : null);
+      if (!name) continue;
+      const id = typeof tc.id === "string" ? (tc.id as string) : null;
+      if (id !== null && seenIds.has(id)) continue;
+      const rawArgs = tc.args ?? tc.arguments ?? fn?.arguments;
+      const args =
+        typeof rawArgs === "string" ? safeJsonParse(rawArgs) ?? rawArgs : rawArgs;
+      parts.push(toolCallPart(name, args, id));
+      if (id !== null) seenIds.add(id);
     }
   }
 
@@ -267,6 +290,14 @@ function openAIContentPartToCanonical(raw: unknown): Part | null {
   const obj = raw as Record<string, unknown>;
   const type = obj.type;
   if (type === "text" && typeof obj.text === "string") return textPart(obj.text);
+  // Anthropic-style inline tool call: `{type:"tool_use", id, name, input}`.
+  // LangChain AIMessage content arrays carry these verbatim, and Langfuse
+  // serializes them straight through. Drop sibling fields (e.g. `caller`)
+  // so the canonical part stays clean.
+  if (type === "tool_use" && typeof obj.name === "string") {
+    const id = typeof obj.id === "string" ? obj.id : null;
+    return toolCallPart(obj.name, obj.input, id);
+  }
   // Vercel AI SDK uses kebab-case content parts inside ai.prompt.messages
   // for tool invocations and results. Map them to canonical snake_case parts
   // so consumers don't have to know about the Vercel-specific shape.
@@ -481,7 +512,12 @@ function unwrapLangchainEnvelope(value: unknown): unknown[] | null {
   }
   if (Array.isArray(value)) {
     if (value.some(isLangchainMessageSerializable)) return value;
-    if (value.length > 0 && value.every(isOpenAIShapeMessage)) return value;
+    if (
+      value.length > 0 &&
+      value.every((v) => isOpenAIShapeMessage(v) || isLangchainPlainDictMessage(v))
+    ) {
+      return value;
+    }
     return null;
   }
   if (typeof value !== "object") return null;
@@ -533,6 +569,7 @@ function unwrapLangchainEnvelope(value: unknown): unknown[] | null {
   if (obj.inputs !== undefined) return unwrapLangchainEnvelope(obj.inputs);
   if (obj.outputs !== undefined) return unwrapLangchainEnvelope(obj.outputs);
   if (isLangchainMessageSerializable(obj)) return [obj];
+  if (isLangchainPlainDictMessage(obj)) return [obj];
   return null;
 }
 
@@ -542,6 +579,29 @@ function isOpenAIShapeMessage(v: unknown): boolean {
     typeof v === "object" &&
     !Array.isArray(v) &&
     typeof (v as Record<string, unknown>).role === "string"
+  );
+}
+
+// LangChain Python's `BaseMessage.dict()` serialization (used by the Langfuse
+// PY callback for ChatAnthropic / LangGraph spans) drops the `lc:1, type:
+// "constructor"` Serializable envelope and emits a flat dict tagged by a
+// short `type` string ("human", "ai", "system", "tool", "function"). The JS
+// SDK uses `role` for the same data, so neither the Serializable check nor
+// the OpenAI-shape check catches these. Recognize them here so `langchain
+// EnvelopeToCanonical` can translate them through `langchainPlainDictTo
+// Message`.
+function isLangchainPlainDictMessage(v: unknown): boolean {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const obj = v as Record<string, unknown>;
+  const t = obj.type;
+  if (typeof t !== "string") return false;
+  return (
+    t === "human" ||
+    t === "ai" ||
+    t === "AIMessageChunk" ||
+    t === "system" ||
+    t === "tool" ||
+    t === "function"
   );
 }
 
@@ -560,10 +620,16 @@ function langchainSerializableToMessage(item: unknown): Message | null {
   if (!isLangchainMessageSerializable(item)) {
     // Be lenient: if the item carries a `role` we can still translate via the
     // OpenAI-shape coercer (covers `{messages:[{role,content}]}` mixed with
-    // Serializables, which the empirical __start__ envelope produces).
+    // Serializables, which the empirical __start__ envelope produces). And
+    // if it carries a `type` matching a known LangChain BaseMessage tag,
+    // route through the plain-dict translator (covers PY callbacks that
+    // emit `BaseMessage.dict()` instead of the Serializable envelope).
     if (item && typeof item === "object") {
       const obj = item as Record<string, unknown>;
       if (typeof obj.role === "string") return openAIMessageToCanonical(obj);
+      if (typeof obj.type === "string" && isLangchainPlainDictMessage(obj)) {
+        return langchainPlainDictToMessage(obj);
+      }
     }
     return null;
   }
@@ -607,6 +673,44 @@ function langchainSerializableToMessage(item: unknown): Message | null {
     case "ChatMessage": {
       const role = (typeof kwargs.role === "string" ? kwargs.role : "user") as Role;
       return langchainTextOnlyMessage(role, content);
+    }
+    default:
+      return null;
+  }
+}
+
+function langchainPlainDictToMessage(obj: Record<string, unknown>): Message | null {
+  const t = String(obj.type);
+  const content = obj.content;
+  switch (t) {
+    case "human":
+      return langchainTextOnlyMessage("user", content);
+    case "system":
+      return langchainTextOnlyMessage("system", content);
+    case "ai":
+    case "AIMessageChunk": {
+      const parts = aiMessageContentAndToolCallsToParts(content, obj.tool_calls);
+      if (parts.length === 0) return null;
+      return { role: "assistant", parts };
+    }
+    case "tool": {
+      const callId = typeof obj.tool_call_id === "string"
+        ? (obj.tool_call_id as string)
+        : null;
+      const msg: Message = {
+        role: "tool",
+        parts: [toolCallResponsePart(content ?? null, callId)],
+      };
+      if (typeof obj.name === "string") msg.name = obj.name as string;
+      return msg;
+    }
+    case "function": {
+      const msg: Message = {
+        role: "tool",
+        parts: [toolCallResponsePart(content ?? null, null)],
+      };
+      if (typeof obj.name === "string") msg.name = obj.name as string;
+      return msg;
     }
     default:
       return null;

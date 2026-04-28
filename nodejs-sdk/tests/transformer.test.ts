@@ -197,6 +197,131 @@ describe("Langfuse v4 non-generation span types", () => {
     );
     expect(obs.type).toBe("AGENT");
   });
+
+  // The Langfuse JS SDK emits `langfuse.observation.type=span` for the
+  // LangChain wrapper spans (LangGraph root, `tools`, `model_request`,
+  // `RunnableLambda`, `__start__`) where the Python SDK emits `chain`. Fold
+  // the JS literal back to CHAIN when the integration metadata says we're
+  // inside a langchain run, so cross-SDK observation types stay aligned.
+  it("type=span folds to CHAIN when ls_integration is langchain_*", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "span",
+              "langfuse.observation.metadata.ls_integration": "langchain_create_agent",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("CHAIN");
+  });
+
+  it("type=span without langchain integration stays SPAN", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "span",
+              "langfuse.observation.metadata.ls_integration": "openai",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("SPAN");
+  });
+});
+
+describe("Langfuse provider/model alias coverage", () => {
+  it("populates provider from langfuse.observation.metadata.ls_provider", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.metadata.ls_provider": "anthropic",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provider).toBe("anthropic");
+  });
+
+  it("populates provided_model_name from langfuse.observation.metadata.ls_model_name", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.metadata.ls_model_name": "claude-sonnet-4-6",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provided_model_name).toBe("claude-sonnet-4-6");
+  });
+
+  // Confirms that finding #7 (tool-span output stringified as ToolMessage
+  // Serializable JSON-blob) is closed by the langchain envelope routing
+  // already in place from the previous fix. ToolMessage Serializables in
+  // `langfuse.observation.output` should produce a clean tool_call_response
+  // part, lifting the `tool_call_id` linkage and the tool name onto the
+  // canonical message.
+  it("normalizes ToolMessage Serializable in langfuse output to tool_call_response", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "tool",
+              "langfuse.observation.output": JSON.stringify({
+                lc: 1,
+                type: "constructor",
+                id: ["langchain_core", "messages", "ToolMessage"],
+                kwargs: {
+                  status: "success",
+                  content: "85",
+                  tool_call_id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+                  name: "add",
+                  additional_kwargs: {},
+                  response_metadata: {},
+                },
+              }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.output_messages).toEqual([
+      {
+        role: "tool",
+        name: "add",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+            response: "85",
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("JSON blob robustness", () => {

@@ -246,18 +246,43 @@ def openai_message_to_canonical(msg: dict) -> Message:
 
     tool_calls = msg.get("tool_calls")
     if isinstance(tool_calls, list):
+        # Accept both OpenAI shape (``{id, type, function:{name, arguments}}``)
+        # and LangChain shape (``{name, args, id, type:"tool_call"}`` —
+        # tool_calls emitted by ``langchain_core`` BaseMessage and surfaced in
+        # Langfuse-Python observation blobs).
+        #
+        # Dedup against tool_call parts already produced from ``content`` (e.g.
+        # Anthropic ``{"type": "tool_use", ...}`` blocks): when both exist they
+        # describe the same invocation and would otherwise duplicate.
+        seen_ids: set = set()
+        for p in parts:
+            if isinstance(p, dict) and p.get("type") == "tool_call":
+                pid = p.get("id")
+                if isinstance(pid, str):
+                    seen_ids.add(pid)
         for tc in tool_calls:
             if not isinstance(tc, dict):
                 continue
-            fn = tc.get("function") or {}
-            name = fn.get("name") if isinstance(fn, dict) else None
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+            name = tc.get("name") if isinstance(tc.get("name"), str) else None
+            if name is None and fn is not None:
+                name = fn.get("name") if isinstance(fn.get("name"), str) else None
             if not isinstance(name, str):
                 continue
-            raw_args = fn.get("arguments") if isinstance(fn, dict) else None
+            call_id = tc.get("id") if isinstance(tc.get("id"), str) else None
+            if call_id is not None and call_id in seen_ids:
+                continue
+            raw_args = tc.get("args")
+            if raw_args is None:
+                raw_args = tc.get("arguments")
+            if raw_args is None and fn is not None:
+                raw_args = fn.get("arguments")
             args = safe_json_parse(raw_args) if isinstance(raw_args, str) else raw_args
             if args is None and isinstance(raw_args, str):
                 args = raw_args
-            parts.append(tool_call_part(name, args, tc.get("id")))
+            parts.append(tool_call_part(name, args, call_id))
+            if call_id is not None:
+                seen_ids.add(call_id)
 
     out: Message = {"role": role, "parts": parts}
     if isinstance(msg.get("name"), str):
@@ -275,6 +300,13 @@ def _openai_content_part_to_canonical(raw: Any) -> Optional[Part]:
     type_ = raw.get("type")
     if type_ == "text" and isinstance(raw.get("text"), str):
         return text_part(raw["text"])
+    # Anthropic-style inline tool call: ``{"type": "tool_use", "id", "name",
+    # "input"}``. LangChain AIMessage content arrays carry these verbatim,
+    # and Langfuse serializes them straight through. Drop sibling fields
+    # (e.g. ``caller``) so the canonical part stays clean.
+    if type_ == "tool_use" and isinstance(raw.get("name"), str):
+        call_id = raw.get("id") if isinstance(raw.get("id"), str) else None
+        return tool_call_part(raw["name"], raw.get("input"), call_id)
     # Vercel AI SDK uses kebab-case content parts inside ai.prompt.messages
     # for tool invocations and results. Map them to canonical snake_case
     # parts so consumers don't have to know about the Vercel-specific shape.
@@ -469,7 +501,10 @@ def _unwrap_langchain_envelope(value: Any) -> Optional[list]:
     if isinstance(value, list):
         if any(_is_langchain_message_serializable(x) for x in value):
             return value
-        if value and all(_is_openai_shape_message(x) for x in value):
+        if value and all(
+            _is_openai_shape_message(x) or _is_langchain_plain_dict_message(x)
+            for x in value
+        ):
             return value
         return None
     if not isinstance(value, dict):
@@ -523,11 +558,30 @@ def _unwrap_langchain_envelope(value: Any) -> Optional[list]:
         return _unwrap_langchain_envelope(value["outputs"])
     if _is_langchain_message_serializable(value):
         return [value]
+    if _is_langchain_plain_dict_message(value):
+        return [value]
     return None
 
 
 def _is_openai_shape_message(v: Any) -> bool:
     return isinstance(v, dict) and isinstance(v.get("role"), str)
+
+
+# LangChain Python's ``BaseMessage.dict()`` serialization (used by the Langfuse
+# PY callback for ChatAnthropic / LangGraph spans) drops the ``lc:1, type:
+# "constructor"`` Serializable envelope and emits a flat dict tagged by a
+# short ``type`` string ("human", "ai", "system", "tool", "function"). The JS
+# SDK uses ``role`` for the same data, so neither the Serializable check nor
+# the OpenAI-shape check catches these. Recognize them here so
+# ``langchain_envelope_to_canonical`` can translate them through
+# ``_langchain_plain_dict_to_message``.
+def _is_langchain_plain_dict_message(v: Any) -> bool:
+    if not isinstance(v, dict):
+        return False
+    t = v.get("type")
+    if not isinstance(t, str):
+        return False
+    return t in ("human", "ai", "AIMessageChunk", "system", "tool", "function")
 
 
 def langchain_envelope_to_canonical(raw: Any) -> Optional[list]:
@@ -546,8 +600,15 @@ def _langchain_serializable_to_message(item: Any) -> Optional[Message]:
     if not _is_langchain_message_serializable(item):
         # Lenient: accept plain ``{"role": ..., "content": ...}`` items mixed
         # with Serializables (the empirical __start__ envelope produces this).
-        if isinstance(item, dict) and isinstance(item.get("role"), str):
-            return openai_message_to_canonical(item)
+        # And if the item carries a ``type`` matching a known LangChain
+        # BaseMessage tag, route through the plain-dict translator (covers PY
+        # callbacks that emit ``BaseMessage.dict()`` instead of the
+        # Serializable envelope).
+        if isinstance(item, dict):
+            if isinstance(item.get("role"), str):
+                return openai_message_to_canonical(item)
+            if isinstance(item.get("type"), str) and _is_langchain_plain_dict_message(item):
+                return _langchain_plain_dict_to_message(item)
         return None
     id_arr = item["id"]
     lc_type = str(id_arr[-1])
@@ -583,6 +644,38 @@ def _langchain_serializable_to_message(item: Any) -> Optional[Message]:
     if lc_type == "ChatMessage":
         role = kwargs.get("role") if isinstance(kwargs.get("role"), str) else "user"
         return _langchain_text_only_message(role, content)
+    return None
+
+
+def _langchain_plain_dict_to_message(obj: dict) -> Optional[Message]:
+    t = str(obj.get("type"))
+    content = obj.get("content")
+    if t == "human":
+        return _langchain_text_only_message("user", content)
+    if t == "system":
+        return _langchain_text_only_message("system", content)
+    if t in ("ai", "AIMessageChunk"):
+        parts = _ai_message_content_and_tool_calls_to_parts(content, obj.get("tool_calls"))
+        if not parts:
+            return None
+        return {"role": "assistant", "parts": parts}
+    if t == "tool":
+        call_id = obj.get("tool_call_id") if isinstance(obj.get("tool_call_id"), str) else None
+        msg: Message = {
+            "role": "tool",
+            "parts": [tool_call_response_part(content if content is not None else None, call_id)],
+        }
+        if isinstance(obj.get("name"), str):
+            msg["name"] = obj["name"]
+        return msg
+    if t == "function":
+        msg = {
+            "role": "tool",
+            "parts": [tool_call_response_part(content if content is not None else None, None)],
+        }
+        if isinstance(obj.get("name"), str):
+            msg["name"] = obj["name"]
+        return msg
     return None
 
 

@@ -337,8 +337,10 @@ def transform_spans(
             "prompt_version": safe_int(first_attr(span_attrs, _langfuse.PROMPT_VERSION_ATTRS)),
             "tool_definitions": _aggregate_tool_definitions(span_attrs)
                                 or first_attr(span_attrs, TOOL_DEFINITIONS_ATTRS),
-            "tool_calls": first_attr(span_attrs, TOOL_CALLS_ATTRS),
-            "tool_call_names": first_attr(span_attrs, TOOL_CALL_NAMES_ATTRS),
+            "tool_calls": first_attr(span_attrs, TOOL_CALLS_ATTRS)
+                          or _derive_tool_calls_from_messages(canonical_messages["output"]),
+            "tool_call_names": first_attr(span_attrs, TOOL_CALL_NAMES_ATTRS)
+                               or _derive_tool_call_names_from_messages(canonical_messages["output"]),
             "tags": tags,
             "event_ts": start_iso,
             "created_at": now,
@@ -481,6 +483,32 @@ def _aggregate_tool_definitions(span_attrs: dict) -> Optional[list]:
         if result:
             return result
     return None
+
+
+def _derive_tool_calls_from_messages(messages: Optional[list]) -> Optional[list]:
+    """Derive ``tool_calls`` from canonical output messages when no adapter
+    exposed a dedicated attribute. Walks every assistant message's parts and
+    collects the discriminated ``tool_call`` parts as-is. Returns ``None``
+    when nothing was found so the caller's fallback chain stays clean.
+    """
+    if not messages:
+        return None
+    out: list = []
+    for m in messages:
+        if m.get("role") != "assistant":
+            continue
+        for p in m.get("parts", []):
+            if isinstance(p, dict) and p.get("type") == "tool_call":
+                out.append(p)
+    return out if out else None
+
+
+def _derive_tool_call_names_from_messages(messages: Optional[list]) -> Optional[list]:
+    calls = _derive_tool_calls_from_messages(messages)
+    if not calls:
+        return None
+    names = [tc.get("name") for tc in calls if isinstance(tc.get("name"), str)]
+    return names if names else None
 
 
 def _resolve_canonical_messages(span_attrs: dict, span: Any) -> dict:

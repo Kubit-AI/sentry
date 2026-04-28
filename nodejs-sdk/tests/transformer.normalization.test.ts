@@ -721,6 +721,275 @@ describe("langfuse normalizer", () => {
       },
     ]);
   });
+
+  // The Langfuse Python SDK serializes the trailing AIMessage from a
+  // LangChain ChatAnthropic tool-use turn as a single object (not wrapped in
+  // an array) with `content: [{type:"tool_use",...}]` plus a parallel
+  // `tool_calls` array. Producing a clean canonical `tool_call` part requires
+  // routing through the LangChain envelope translator and a single-object
+  // shim before falling back to text-wrap.
+  it("normalizes langchain ChatAnthropic tool_use output to a tool_call part", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.input": JSON.stringify([
+        { role: "user", content: "What is 47 + 38?" },
+      ]),
+      "langfuse.observation.output": JSON.stringify({
+        role: "assistant",
+        content: [
+          {
+            id: "toolu_01SL9hqG8nmgqKPF4jirTY8a",
+            caller: { type: "direct" },
+            input: { a: 47, b: 38 },
+            name: "add",
+            type: "tool_use",
+          },
+        ],
+        tool_calls: [
+          {
+            name: "add",
+            args: { a: 47, b: 38 },
+            id: "toolu_01SL9hqG8nmgqKPF4jirTY8a",
+            type: "tool_call",
+          },
+        ],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "add",
+            id: "toolu_01SL9hqG8nmgqKPF4jirTY8a",
+            arguments: { a: 47, b: 38 },
+          },
+        ],
+      },
+    ]);
+    expect(r.tool_calls).toEqual([
+      {
+        type: "tool_call",
+        name: "add",
+        id: "toolu_01SL9hqG8nmgqKPF4jirTY8a",
+        arguments: { a: 47, b: 38 },
+      },
+    ]);
+    expect(r.tool_call_names).toEqual(["add"]);
+  });
+
+  // The Langfuse Python LangChain integration injects each tool definition
+  // as a phantom `{role:"tool", content:{name, input_schema, description}}`
+  // entry inside `langfuse.observation.input` alongside the actual user
+  // turn. These are tool *definitions*, not chat messages — drop them from
+  // input_messages and surface them via the top-level `tool_definitions`
+  // field instead.
+  it("routes langfuse tool-definition phantom messages into tool_definitions", () => {
+    const toolDef = {
+      name: "add",
+      input_schema: {
+        properties: { a: { type: "number" }, b: { type: "number" } },
+        required: ["a", "b"],
+        type: "object",
+      },
+      description: "Adds two numbers together.",
+    };
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.input": JSON.stringify([
+        { role: "user", content: "What is 47 + 38?" },
+        { role: "tool", content: toolDef },
+      ]),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
+    ]);
+    expect(r.tool_definitions).toEqual([toolDef]);
+  });
+
+  // The Langfuse JS LangChain integration projects LangChain ToolMessage
+  // into `{role: <tool_name>, content: <result>, additional_kwargs: {}}`
+  // (using the tool name as the role, no tool_call_id link). The langfuse
+  // adapter recovers the canonical `role:"tool"` + `tool_call_response` part
+  // by matching the role string against tool_call.name on the preceding
+  // assistant message.
+  it("retags tool-name roles back to 'tool' with tool_call_response linkage", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.input": JSON.stringify([
+        { content: "What is 47 + 38?", role: "user" },
+        {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+              name: "add",
+              input: { a: 47, b: 38 },
+            },
+          ],
+          role: "assistant",
+          tool_calls: [
+            {
+              name: "add",
+              args: { a: 47, b: 38 },
+              id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+              type: "tool_call",
+            },
+          ],
+        },
+        { content: "85", additional_kwargs: {}, role: "add" },
+        { content: "47 + 38 = 85", role: "assistant" },
+      ]),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    const msgs = asMessages(r.input_messages);
+    expect(msgs).toHaveLength(4);
+    expect(msgs[0]).toEqual({
+      role: "user",
+      parts: [{ type: "text", content: "What is 47 + 38?" }],
+    });
+    expect(msgs[1]).toEqual({
+      role: "assistant",
+      parts: [
+        {
+          type: "tool_call",
+          name: "add",
+          id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+          arguments: { a: 47, b: 38 },
+        },
+      ],
+    });
+    expect(msgs[2]).toEqual({
+      role: "tool",
+      name: "add",
+      parts: [
+        {
+          type: "tool_call_response",
+          id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+          response: "85",
+        },
+      ],
+    });
+    expect(msgs[3]).toEqual({
+      role: "assistant",
+      parts: [{ type: "text", content: "47 + 38 = 85" }],
+    });
+  });
+
+  // The Langfuse Python LangChain integration serializes a ToolMessage as a
+  // plain `BaseMessage.dict()` blob — `{type:"tool", content, tool_call_id,
+  // name, ...}` — without the `lc:1, type:"constructor"` Serializable
+  // envelope and without an OpenAI-shape `role` field. Recover the canonical
+  // role:"tool" + tool_call_response part by matching on the `type` field.
+  it("normalizes PY plain-dict ToolMessage as role:tool with tool_call_id", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.input": JSON.stringify({ a: 47, b: 38 }),
+      "langfuse.observation.output": JSON.stringify({
+        content: "85.0",
+        additional_kwargs: {},
+        response_metadata: {},
+        type: "tool",
+        name: "add",
+        id: null,
+        tool_call_id: "toolu_01SL9hqG8nmgqKPF4jirTY8a",
+        artifact: null,
+        status: "success",
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "tool",
+        name: "add",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "toolu_01SL9hqG8nmgqKPF4jirTY8a",
+            response: "85.0",
+          },
+        ],
+      },
+    ]);
+  });
+
+  // PY langchain CHAIN spans wrap the conversation as `{messages: [...]}`
+  // where every entry is a plain `BaseMessage.dict()` blob (`type:"human"`,
+  // `type:"ai"`, `type:"tool"`). All entries should normalize cleanly.
+  it("normalizes PY plain-dict {messages:[...]} array end-to-end", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.output": JSON.stringify({
+        messages: [
+          { content: "What is 47 + 38?", type: "human" },
+          {
+            content: [
+              {
+                id: "toolu_x",
+                input: { a: 47, b: 38 },
+                name: "add",
+                type: "tool_use",
+              },
+            ],
+            type: "ai",
+            tool_calls: [
+              {
+                name: "add",
+                args: { a: 47, b: 38 },
+                id: "toolu_x",
+                type: "tool_call",
+              },
+            ],
+          },
+          {
+            content: "85",
+            type: "tool",
+            name: "add",
+            tool_call_id: "toolu_x",
+          },
+        ],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(asMessages(r.output_messages)).toEqual([
+      { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "add",
+            id: "toolu_x",
+            arguments: { a: 47, b: 38 },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        name: "add",
+        parts: [{ type: "tool_call_response", id: "toolu_x", response: "85" }],
+      },
+    ]);
+  });
+
+  // Standalone tool-name role: the JS langfuse `tools` CHAIN span carries a
+  // single-message output `[{role:"add", content:"85"}]` with no preceding
+  // assistant tool_call message in the same array. The role should still be
+  // rewritten to canonical "tool" with the tool name preserved, even without
+  // a recoverable tool_call_id.
+  it("rewrites standalone tool-name role even without a preceding tool_call", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.output": JSON.stringify([
+        { content: "85", role: "add" },
+      ]),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "tool",
+        name: "add",
+        parts: [{ type: "tool_call_response", response: "85" }],
+      },
+    ]);
+  });
 });
 
 describe("span-event fallback", () => {

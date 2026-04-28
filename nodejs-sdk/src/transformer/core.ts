@@ -352,8 +352,10 @@ export function transformSpans(
         prompt_version: safeInt(firstAttr(spanAttrs, PROMPT_VERSION_ATTRS)),
         tool_definitions: aggregateToolDefinitions(spanAttrs)
                           ?? firstAttr(spanAttrs, TOOL_DEFINITIONS_ATTRS) ?? null,
-        tool_calls: firstAttr(spanAttrs, TOOL_CALLS_ATTRS) ?? null,
-        tool_call_names: firstAttr(spanAttrs, TOOL_CALL_NAMES_ATTRS) ?? null,
+        tool_calls: firstAttr(spanAttrs, TOOL_CALLS_ATTRS)
+                    ?? deriveToolCallsFromMessages(canonicalMessages.output),
+        tool_call_names: firstAttr(spanAttrs, TOOL_CALL_NAMES_ATTRS)
+                         ?? deriveToolCallNamesFromMessages(canonicalMessages.output),
         tags,
         event_ts: startIso,
         created_at: now,
@@ -434,6 +436,39 @@ function aggregateToolDefinitions(spanAttrs: Record<string, unknown>): unknown[]
     if (result && result.length > 0) return result;
   }
   return null;
+}
+
+/**
+ * Derive `tool_calls` from canonical output messages when no adapter
+ * exposed a dedicated attribute. Walks every assistant message's parts
+ * and collects the discriminated `tool_call` parts as-is. Returns `null`
+ * when nothing was found so the caller's `?? null` chain stays clean.
+ */
+function deriveToolCallsFromMessages(
+  messages: Message[] | null,
+): unknown[] | null {
+  if (!messages) return null;
+  const out: unknown[] = [];
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    for (const p of m.parts) {
+      if ((p as { type?: unknown }).type === "tool_call") out.push(p);
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
+function deriveToolCallNamesFromMessages(
+  messages: Message[] | null,
+): string[] | null {
+  const calls = deriveToolCallsFromMessages(messages);
+  if (!calls) return null;
+  const names: string[] = [];
+  for (const tc of calls) {
+    const n = (tc as { name?: unknown }).name;
+    if (typeof n === "string") names.push(n);
+  }
+  return names.length > 0 ? names : null;
 }
 
 type SpanEvent = {
