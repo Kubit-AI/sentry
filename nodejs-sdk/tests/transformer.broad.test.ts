@@ -852,6 +852,31 @@ describe("OpenInference retrieval documents", () => {
       { role: "assistant", content: "from messages" },
     ]);
   });
+
+  it("retrieval docs populate both legacy `output` and canonical `output_messages`", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "retriever",
+              "retrieval.documents.0.document.content": "Paris is the capital of France.",
+              "retrieval.documents.0.document.id": "doc-1",
+              "retrieval.documents.0.document.score": 0.97,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    // Legacy path (unpackMessages)
+    expect(obs.output).toBeTruthy();
+    expect(JSON.stringify(obs.output)).toContain("Paris is the capital of France.");
+    // Canonical path (normalizeMessages)
+    expect(obs.output_messages).toBeTruthy();
+    expect(JSON.stringify(obs.output_messages)).toContain("Paris is the capital of France.");
+  });
 });
 
 // LangChain (JS via `@arizeai/openinference-instrumentation-langchain`,

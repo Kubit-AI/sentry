@@ -683,6 +683,28 @@ class TestOpenInferenceRetrievalDocs:
         parsed = json.loads(obs["output"])
         assert parsed == [{"role": "assistant", "content": "from messages"}]
 
+    def test_retrieval_docs_populate_both_legacy_and_canonical_outputs(self):
+        """Regression guard: retrieval docs must reach both the legacy
+        ``output`` string (via unpack_messages) AND the canonical
+        ``output_messages`` array (via normalize_messages). Refactoring
+        either path should not silently break the other.
+        """
+        span = _mock_span(
+            attributes={
+                "openinference.span.kind": "retriever",
+                "retrieval.documents.0.document.content": "Paris is the capital of France.",
+                "retrieval.documents.0.document.id": "doc-1",
+                "retrieval.documents.0.document.score": 0.97,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        # Legacy path (unpack_messages)
+        assert obs["output"]
+        assert "Paris is the capital of France." in json.dumps(obs["output"])
+        # Canonical path (normalize_messages)
+        assert obs["output_messages"]
+        assert "Paris is the capital of France." in json.dumps(obs["output_messages"])
+
 
 def _lc_msg(type_: str, kwargs: dict) -> dict:
     """LangChain Serializable shape:
