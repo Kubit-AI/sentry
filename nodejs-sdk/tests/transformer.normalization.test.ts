@@ -1239,6 +1239,29 @@ describe("system_instructions injection", () => {
     });
     expect(r.input_messages).toHaveLength(2);
   });
+
+  it("text-wraps non-string non-object items in array form", () => {
+    // Out-of-spec input (the schema wants Parts), but cross-SDK parity
+    // requires both SDKs produce the same shape. Numbers wrap as text;
+    // null/undefined items drop.
+    const span = makeSpan({
+      attrs: {
+        "gen_ai.system_instructions": JSON.stringify([42, 7, "ok", null]),
+        "gen_ai.input.messages": JSON.stringify([
+          { role: "user", content: "hi" },
+        ]),
+      },
+    });
+    const r = obs(transformSpans([span], "w", "c"));
+    expect(asMessages(r.input_messages)[0]).toEqual({
+      role: "system",
+      parts: [
+        { type: "text", content: "42" },
+        { type: "text", content: "7" },
+        { type: "text", content: "ok" },
+      ],
+    });
+  });
 });
 
 describe("non-LLM spans", () => {

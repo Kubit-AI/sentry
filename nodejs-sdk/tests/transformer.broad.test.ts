@@ -187,6 +187,19 @@ describe("Braintrust schema", () => {
     );
     expect(obs.type).toBe("GENERATION");
   });
+
+  it("accepts the namespaced braintrust.span_attributes.type form", () => {
+    // Some emitters namespace the discriminator under `braintrust.`; both
+    // forms must resolve to the same observation type.
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ attrs: { "braintrust.span_attributes.type": "eval" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EVAL");
+  });
 });
 
 describe("OpenInference schema", () => {

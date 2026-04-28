@@ -591,6 +591,13 @@ function parseSystemInstructions(raw: unknown): Message | null {
         }
         // Fallback: stringify a structured value with no `type`.
         parts.push(textPart(stringifyForText(item)));
+        continue;
+      }
+      // Non-string non-object items (numbers, booleans). Out-of-spec but
+      // text-wrap them rather than drop, mirroring the Python adapter so
+      // both SDKs produce the same number of parts.
+      if (item !== null && item !== undefined) {
+        parts.push(textPart(stringifyForText(item)));
       }
     }
     if (parts.length === 0) return null;

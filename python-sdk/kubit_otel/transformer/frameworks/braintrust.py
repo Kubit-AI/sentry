@@ -60,7 +60,14 @@ CACHE_TOKEN_MAP: tuple[tuple[str, str], ...] = ()
 PARAMS_BLOB_ATTRS: tuple[str, ...] = ()
 FLAT_PARAM_ATTRS: tuple[str, ...] = ()
 
-_SPAN_TYPE_ATTR = "span_attributes.type"
+# Some emitters namespace the discriminator under ``braintrust.`` per OTel
+# attribute-naming conventions; native Braintrust keeps it unprefixed. Accept
+# both, preferring the namespaced form. Mirrors ``SPAN_TYPE_ATTRS`` in
+# ``nodejs-sdk/src/transformer/frameworks/braintrust.ts``.
+_SPAN_TYPE_ATTRS = (
+    "braintrust.span_attributes.type",
+    "span_attributes.type",
+)
 _METRICS_PREFIX = "braintrust.metrics."
 _INPUT_INDEX_PREFIX = "braintrust.input."
 _OUTPUT_INDEX_PREFIX = "braintrust.output."
@@ -69,12 +76,14 @@ _SCORES_ATTR = "braintrust.scores"
 
 
 def resolve_observation_type(span_attrs: dict) -> str | None:
-    bt = clean_discriminator(span_attrs.get(_SPAN_TYPE_ATTR))
-    if not bt:
-        return None
-    if bt == "llm":
-        return "GENERATION"
-    return bt.upper()
+    for key in _SPAN_TYPE_ATTRS:
+        bt = clean_discriminator(span_attrs.get(key))
+        if not bt:
+            continue
+        if bt == "llm":
+            return "GENERATION"
+        return bt.upper()
+    return None
 
 
 def unpack_messages(span_attrs: dict) -> tuple[Optional[str], Optional[str]]:

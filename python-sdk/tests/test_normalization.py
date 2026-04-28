@@ -1188,6 +1188,24 @@ class TestSystemInstructionsInjection:
         assert r["input_messages"][0]["parts"][0] == {"type": "text", "content": "Be terse"}
         assert len(r["input_messages"]) == 2
 
+    def test_text_wraps_non_string_non_object_items_in_array_form(self):
+        # Out-of-spec input (the schema wants Parts), but cross-SDK parity
+        # requires both SDKs produce the same shape. Numbers wrap as text;
+        # null items drop.
+        span = _mock_span(attrs={
+            "gen_ai.system_instructions": json.dumps([42, 7, "ok", None]),
+            "gen_ai.input.messages": json.dumps([{"role": "user", "content": "hi"}]),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"][0] == {
+            "role": "system",
+            "parts": [
+                {"type": "text", "content": "42"},
+                {"type": "text", "content": "7"},
+                {"type": "text", "content": "ok"},
+            ],
+        }
+
 
 # ── Non-LLM spans ─────────────────────────────────────────────────────────
 

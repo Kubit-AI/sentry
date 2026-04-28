@@ -195,6 +195,13 @@ class TestBraintrustSchema:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "GENERATION"
 
+    def test_namespaced_braintrust_span_attributes_type(self):
+        # Some emitters namespace the discriminator under ``braintrust.``;
+        # both forms must resolve to the same observation type.
+        span = _mock_span(attributes={"braintrust.span_attributes.type": "eval"})
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EVAL"
+
 
 class TestOpenInferenceSchema:
     """OpenInference / Arize Phoenix uses its own ``llm.*`` namespace plus
