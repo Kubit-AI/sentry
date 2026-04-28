@@ -14,6 +14,12 @@ import json
 from typing import Any, Optional
 
 from ..helpers import clean_discriminator
+from ..messages import (
+    coerce_to_messages,
+    stringify_for_text,
+    text_message,
+    unpack_indexed_messages,
+)
 
 NAME = "traceloop"
 
@@ -123,3 +129,31 @@ def _unpack_indexed(span_attrs: dict, prefix: str) -> Optional[str]:
         return None
     ordered = [messages[i] for i in sorted(messages)]
     return json.dumps(ordered)
+
+
+def normalize_messages(span_attrs: dict) -> dict | None:
+    indexed_in = unpack_indexed_messages(span_attrs, _PROMPT_INDEX_PREFIX, "")
+    indexed_out = unpack_indexed_messages(span_attrs, _COMPLETION_INDEX_PREFIX, "")
+
+    input_msgs = indexed_in or _entity_to_messages(
+        span_attrs.get("traceloop.entity.input"), "user"
+    )
+    output_msgs = indexed_out or _entity_to_messages(
+        span_attrs.get("traceloop.entity.output"), "assistant"
+    )
+
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _entity_to_messages(raw: Any, role: str) -> Optional[list]:
+    if raw is None:
+        return None
+    coerced = coerce_to_messages(raw)
+    if coerced:
+        return coerced
+    text = stringify_for_text(raw)
+    if not text:
+        return None
+    return [text_message(role, text)]

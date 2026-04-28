@@ -7,6 +7,10 @@ land through ``otel_genai``. This module adds ``logfire.tags`` plus
 
 from __future__ import annotations
 
+from typing import Optional
+
+from ..messages import pydantic_ai_envelope_to_canonical
+
 NAME = "logfire"
 
 MODEL_ATTRS: tuple[str, ...] = ()
@@ -41,3 +45,13 @@ SYSTEM_INSTRUCTIONS_ATTRS: tuple[str, ...] = ()
 CACHE_TOKEN_MAP: tuple[tuple[str, str], ...] = ()
 PARAMS_BLOB_ATTRS: tuple[str, ...] = ()
 FLAT_PARAM_ATTRS: tuple[str, ...] = ()
+
+
+def normalize_messages(span_attrs: dict) -> Optional[dict]:
+    raw = span_attrs.get("pydantic_ai.all_messages")
+    if raw is None:
+        return None
+    result = pydantic_ai_envelope_to_canonical(raw)
+    if result["input"] is None and result["output"] is None:
+        return None
+    return result

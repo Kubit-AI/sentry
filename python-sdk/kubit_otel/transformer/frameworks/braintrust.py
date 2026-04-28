@@ -12,6 +12,12 @@ import json
 from typing import Any, Optional
 
 from ..helpers import clean_discriminator, safe_float
+from ..messages import (
+    coerce_to_messages,
+    stringify_for_text,
+    text_message,
+    unpack_indexed_messages,
+)
 
 NAME = "braintrust"
 
@@ -97,6 +103,38 @@ def _unpack_indexed(span_attrs: dict, prefix: str) -> Optional[str]:
     if not messages:
         return None
     return json.dumps([messages[i] for i in sorted(messages)])
+
+
+def normalize_messages(span_attrs: dict) -> dict | None:
+    indexed_in = unpack_indexed_messages(span_attrs, _INPUT_INDEX_PREFIX, "")
+    indexed_out = unpack_indexed_messages(span_attrs, _OUTPUT_INDEX_PREFIX, "")
+
+    input_msgs = (
+        indexed_in
+        or _json_to_messages(span_attrs.get("braintrust.input_json"), "user")
+        or _json_to_messages(span_attrs.get("gen_ai.prompt_json"), "user")
+    )
+    output_msgs = (
+        indexed_out
+        or _json_to_messages(span_attrs.get("braintrust.output_json"), "assistant")
+        or _json_to_messages(span_attrs.get("gen_ai.completion_json"), "assistant")
+    )
+
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _json_to_messages(raw: Any, role: str) -> Optional[list]:
+    if raw is None:
+        return None
+    coerced = coerce_to_messages(raw)
+    if coerced:
+        return coerced
+    text = stringify_for_text(raw)
+    if not text:
+        return None
+    return [text_message(role, text)]
 
 
 def parse_usage_blobs(span_attrs: dict, usage_details: dict[str, Any]) -> None:

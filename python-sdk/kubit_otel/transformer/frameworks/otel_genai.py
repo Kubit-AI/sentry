@@ -14,6 +14,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..helpers import clean_discriminator
+from ..messages import (
+    coerce_to_messages,
+    safe_json_parse,
+    text_message,
+    tool_call_part,
+)
 
 NAME = "otel_genai"
 
@@ -147,3 +153,71 @@ def build_params(span_attrs: dict, merged: dict[str, Any]) -> None:
         key = attr[len("gen_ai.request."):]
         if key not in merged:
             merged[key] = val
+
+
+def normalize_messages(span_attrs: dict) -> dict | None:
+    input_msgs = _canonicalize_side(
+        span_attrs.get("gen_ai.input.messages"),
+        span_attrs.get("gen_ai.prompt") or span_attrs.get("gen_ai.content.prompt"),
+        "user",
+    )
+    output_msgs = _canonicalize_side(
+        span_attrs.get("gen_ai.output.messages"),
+        span_attrs.get("gen_ai.completion") or span_attrs.get("gen_ai.content.completion"),
+        "assistant",
+    )
+    output_msgs = _merge_tool_calls_into_output(
+        output_msgs, span_attrs.get("gen_ai.tool.calls")
+    )
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _canonicalize_side(messages_attr: Any, text_attr: Any, text_role: str) -> list | None:
+    if messages_attr is not None:
+        coerced = coerce_to_messages(messages_attr)
+        if coerced:
+            return coerced
+    if isinstance(text_attr, str) and text_attr:
+        return [text_message(text_role, text_attr)]
+    return None
+
+
+def _merge_tool_calls_into_output(output: list | None, raw_tool_calls: Any) -> list | None:
+    """If ``gen_ai.tool.calls`` is present, append ``ToolCallRequestPart``s
+    onto the trailing assistant message. Synthesizes an assistant message if
+    none exists yet.
+    """
+    if raw_tool_calls is None:
+        return output
+    parsed = safe_json_parse(raw_tool_calls) if isinstance(raw_tool_calls, str) else raw_tool_calls
+    if not isinstance(parsed, list) or not parsed:
+        return output
+
+    parts: list = []
+    for tc in parsed:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+        name = tc.get("name") or (fn.get("name") if fn else None)
+        if not isinstance(name, str):
+            continue
+        raw_args = tc.get("arguments") if "arguments" in tc else (fn.get("arguments") if fn else None)
+        args = safe_json_parse(raw_args) if isinstance(raw_args, str) else raw_args
+        if args is None and isinstance(raw_args, str):
+            args = raw_args
+        call_id = tc.get("id") if isinstance(tc.get("id"), str) else None
+        parts.append(tool_call_part(name, args, call_id))
+    if not parts:
+        return output
+
+    if output:
+        last = output[-1]
+        if last.get("role") == "assistant":
+            last["parts"] = list(last.get("parts", [])) + parts
+            return output
+    synthesized = {"role": "assistant", "parts": parts}
+    if output:
+        return list(output) + [synthesized]
+    return [synthesized]

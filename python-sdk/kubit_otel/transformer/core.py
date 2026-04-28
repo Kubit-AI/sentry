@@ -26,6 +26,13 @@ from .helpers import (
     safe_float,
     safe_int,
 )
+from .messages import (
+    canonicalize_gen_ai_events,
+    safe_json_parse,
+    stringify_for_text,
+    text_message,
+    text_part,
+)
 from .registry import DISCRIMINATOR_ORDER, FRAMEWORKS
 
 logger = logging.getLogger(__name__)
@@ -190,6 +197,7 @@ def transform_spans(
                 enrich(span_attrs, metadata)
 
         event_input, event_output = _unpack_gen_ai_events(span)
+        canonical_messages = _resolve_canonical_messages(span_attrs, span)
         trace_name_override = span_attrs.get(_LANGFUSE_TRACE_NAME_ATTR)
 
         if is_root and trace_id not in emitted_traces:
@@ -209,6 +217,8 @@ def transform_spans(
                 "tags": tags,
                 "input": _resolve_input(span_attrs) or event_input,
                 "output": _resolve_output(span_attrs) or event_output,
+                "input_messages": canonical_messages["input"],
+                "output_messages": canonical_messages["output"],
                 "public": False,
                 "bookmarked": False,
                 "timestamp": start_iso,
@@ -315,6 +325,8 @@ def transform_spans(
             "system_instructions": first_attr(span_attrs, SYSTEM_INSTRUCTIONS_ATTRS),
             "input": input_text,
             "output": output_text,
+            "input_messages": canonical_messages["input"],
+            "output_messages": canonical_messages["output"],
             "metadata": dict(metadata),
             "provided_usage_details": usage_details,
             "usage_details": usage_details,
@@ -453,6 +465,96 @@ def _resolve_provider(span_attrs: dict) -> Optional[str]:
         if val is None:
             continue
         return val if isinstance(val, str) else str(val)
+    return None
+
+
+def _resolve_canonical_messages(span_attrs: dict, span: Any) -> dict:
+    """Build the canonical OTel GenAI v2 message arrays for both directions.
+
+    Priority order:
+      1. Each adapter's ``normalize_messages`` hook (registry order; per-side
+         first-non-null wins so a Vercel input + Langfuse output combo works).
+      2. Span-event fallback for emitters that put messages on
+         ``gen_ai.user.message`` / ``gen_ai.choice`` / etc. events rather than
+         attributes.
+      3. Best-effort text-wrap of the legacy ``_resolve_input``/``_resolve_output``
+         result for adapters that contribute INPUT_ATTRS but no normalizer
+         (defensive — every shipped adapter currently has a normalizer).
+      4. ``gen_ai.system_instructions`` injection: prepended as the leading
+         ``role: "system"`` message when not already present at head of input.
+    """
+    input_msgs: Optional[list] = None
+    output_msgs: Optional[list] = None
+
+    for fw in FRAMEWORKS:
+        if input_msgs is not None and output_msgs is not None:
+            break
+        normalize = getattr(fw, "normalize_messages", None)
+        if normalize is None:
+            continue
+        result = normalize(span_attrs)
+        if not result:
+            continue
+        if input_msgs is None and result.get("input") is not None:
+            input_msgs = result["input"]
+        if output_msgs is None and result.get("output") is not None:
+            output_msgs = result["output"]
+
+    if input_msgs is None or output_msgs is None:
+        ev = canonicalize_gen_ai_events(getattr(span, "events", None))
+        if input_msgs is None:
+            input_msgs = ev["input"]
+        if output_msgs is None:
+            output_msgs = ev["output"]
+
+    if input_msgs is None:
+        legacy = _resolve_input(span_attrs)
+        if legacy is not None:
+            text = stringify_for_text(legacy)
+            if text:
+                input_msgs = [text_message("user", text)]
+    if output_msgs is None:
+        legacy = _resolve_output(span_attrs)
+        if legacy is not None:
+            text = stringify_for_text(legacy)
+            if text:
+                output_msgs = [text_message("assistant", text)]
+
+    sys_msg = _parse_system_instructions(span_attrs.get("gen_ai.system_instructions"))
+    if sys_msg is not None:
+        if not input_msgs or input_msgs[0].get("role") != "system":
+            input_msgs = [sys_msg] + (input_msgs or [])
+
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _parse_system_instructions(raw: Any) -> Optional[dict]:
+    """Parse ``gen_ai.system_instructions`` into a canonical ``system`` message.
+
+    Spec form is an array of parts (e.g. ``[{"type": "text", "content": "..."}]``);
+    tolerates plain-string emitters (wraps as a single TextPart) and
+    JSON-stringified arrays.
+    """
+    if raw is None:
+        return None
+    value: Any = raw
+    if isinstance(raw, str):
+        parsed = safe_json_parse(raw)
+        value = parsed if parsed is not None else raw
+    if isinstance(value, list):
+        parts: list = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(text_part(item))
+            elif isinstance(item, dict) and isinstance(item.get("type"), str):
+                parts.append(item)
+            elif item is not None:
+                parts.append(text_part(stringify_for_text(item)))
+        if not parts:
+            return None
+        return {"role": "system", "parts": parts}
+    if isinstance(value, str) and value:
+        return {"role": "system", "parts": [text_part(value)]}
     return None
 
 

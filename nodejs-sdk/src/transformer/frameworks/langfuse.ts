@@ -10,6 +10,14 @@
  */
 
 import { cleanDiscriminator, mergeJsonBlob } from "../helpers";
+import {
+  coerceToMessages,
+  safeJsonParse,
+  stringifyForText,
+  textMessage,
+  toolCallPart,
+} from "../messages";
+import type { CanonicalMessages, Message, ToolCallRequestPart } from "./types";
 import { makeAdapter } from "./makeAdapter";
 
 const USAGE_BLOB_ATTR = "langfuse.observation.usage_details";
@@ -90,4 +98,62 @@ export const adapter = makeAdapter({
       }
     }
   },
+  normalizeMessages(attrs): CanonicalMessages | null {
+    const input = blobToMessages(attrs["langfuse.observation.input"], "user");
+    let output = blobToMessages(attrs["langfuse.observation.output"], "assistant");
+
+    // Tool-call merge: `langfuse.observation.tool_calls` is a JSON array of
+    // `{id, name, arguments}` (or OpenAI shape). Merge into trailing assistant
+    // message of output, or synthesize one.
+    const rawCalls = attrs["langfuse.observation.tool_calls"];
+    if (rawCalls !== undefined && rawCalls !== null) {
+      const parts = parseLangfuseToolCalls(rawCalls);
+      if (parts.length > 0) {
+        if (output && output[output.length - 1].role === "assistant") {
+          output[output.length - 1].parts = [
+            ...output[output.length - 1].parts,
+            ...parts,
+          ];
+        } else {
+          const synthesized: Message = { role: "assistant", parts };
+          output = output ? [...output, synthesized] : [synthesized];
+        }
+      }
+    }
+
+    if (input === null && output === null) return null;
+    return { input, output };
+  },
 });
+
+function blobToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
+  if (raw === undefined || raw === null) return null;
+  const coerced = coerceToMessages(raw);
+  if (coerced && coerced.length > 0) return coerced;
+  // Non-array JSON / plain string: lossy text wrap so the payload still
+  // surfaces (langfuse.observation.input is intentionally opaque).
+  const str = stringifyForText(raw);
+  if (!str) return null;
+  return [textMessage(role, str)];
+}
+
+function parseLangfuseToolCalls(raw: unknown): ToolCallRequestPart[] {
+  const parsed = typeof raw === "string" ? safeJsonParse(raw) : raw;
+  if (!Array.isArray(parsed)) return [];
+  const out: ToolCallRequestPart[] = [];
+  for (const tc of parsed) {
+    if (!tc || typeof tc !== "object") continue;
+    const obj = tc as Record<string, unknown>;
+    const fn = obj.function as Record<string, unknown> | undefined;
+    const name =
+      (typeof obj.name === "string" ? obj.name : undefined) ??
+      (typeof fn?.name === "string" ? (fn.name as string) : undefined);
+    if (!name) continue;
+    const id = typeof obj.id === "string" ? obj.id : null;
+    const rawArgs = obj.arguments ?? fn?.arguments;
+    const args =
+      typeof rawArgs === "string" ? safeJsonParse(rawArgs) ?? rawArgs : rawArgs;
+    out.push(toolCallPart(name, args, id));
+  }
+  return out;
+}

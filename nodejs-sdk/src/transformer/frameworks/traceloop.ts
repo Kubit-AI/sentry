@@ -10,6 +10,13 @@
  */
 
 import { cleanDiscriminator } from "../helpers";
+import {
+  coerceToMessages,
+  stringifyForText,
+  textMessage,
+  unpackIndexedMessages,
+} from "../messages";
+import type { CanonicalMessages, Message } from "./types";
 import { makeAdapter } from "./makeAdapter";
 
 const SPAN_KIND_ATTR = "traceloop.span.kind";
@@ -83,4 +90,23 @@ export const adapter = makeAdapter({
       unpackIndexed(attrs, COMPLETION_INDEX_PREFIX),
     ];
   },
+  normalizeMessages(attrs): CanonicalMessages | null {
+    const indexedIn = unpackIndexedMessages(attrs, PROMPT_INDEX_PREFIX, "");
+    const indexedOut = unpackIndexedMessages(attrs, COMPLETION_INDEX_PREFIX, "");
+
+    const input = indexedIn ?? entityToMessages(attrs["traceloop.entity.input"], "user");
+    const output = indexedOut ?? entityToMessages(attrs["traceloop.entity.output"], "assistant");
+
+    if (input === null && output === null) return null;
+    return { input, output };
+  },
 });
+
+function entityToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
+  if (raw === undefined || raw === null) return null;
+  const coerced = coerceToMessages(raw);
+  if (coerced && coerced.length > 0) return coerced;
+  const str = stringifyForText(raw);
+  if (!str) return null;
+  return [textMessage(role, str)];
+}

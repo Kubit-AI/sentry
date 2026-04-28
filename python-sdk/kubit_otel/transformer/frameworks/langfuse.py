@@ -11,7 +11,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from typing import Optional
+
 from ..helpers import clean_discriminator, merge_json_blob
+from ..messages import (
+    coerce_to_messages,
+    safe_json_parse,
+    stringify_for_text,
+    text_message,
+    tool_call_part,
+)
 
 NAME = "langfuse"
 
@@ -122,3 +131,55 @@ def enrich_metadata(span_attrs: dict, metadata: dict[str, Any]) -> None:
             if key.startswith(prefix):
                 metadata.setdefault(key[len(prefix):], value)
                 break
+
+
+def normalize_messages(span_attrs: dict) -> Optional[dict]:
+    input_msgs = _blob_to_messages(span_attrs.get("langfuse.observation.input"), "user")
+    output_msgs = _blob_to_messages(span_attrs.get("langfuse.observation.output"), "assistant")
+
+    raw_calls = span_attrs.get("langfuse.observation.tool_calls")
+    if raw_calls is not None:
+        parts = _parse_langfuse_tool_calls(raw_calls)
+        if parts:
+            if output_msgs and output_msgs[-1].get("role") == "assistant":
+                output_msgs[-1]["parts"] = list(output_msgs[-1].get("parts", [])) + parts
+            else:
+                synthesized = {"role": "assistant", "parts": parts}
+                output_msgs = (output_msgs or []) + [synthesized]
+
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _blob_to_messages(raw: Any, role: str) -> Optional[list]:
+    if raw is None:
+        return None
+    coerced = coerce_to_messages(raw)
+    if coerced:
+        return coerced
+    text = stringify_for_text(raw)
+    if not text:
+        return None
+    return [text_message(role, text)]
+
+
+def _parse_langfuse_tool_calls(raw: Any) -> list:
+    parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
+    if not isinstance(parsed, list):
+        return []
+    out: list = []
+    for tc in parsed:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+        name = tc.get("name") or (fn.get("name") if fn else None)
+        if not isinstance(name, str):
+            continue
+        call_id = tc.get("id") if isinstance(tc.get("id"), str) else None
+        raw_args = tc.get("arguments") if "arguments" in tc else (fn.get("arguments") if fn else None)
+        args = safe_json_parse(raw_args) if isinstance(raw_args, str) else raw_args
+        if args is None and isinstance(raw_args, str):
+            args = raw_args
+        out.append(tool_call_part(name, args, call_id))
+    return out

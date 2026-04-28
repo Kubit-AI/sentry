@@ -14,6 +14,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from ..messages import (
+    coerce_to_messages,
+    safe_json_parse,
+    text_message,
+    tool_call_part,
+    tool_call_response_part,
+)
+
 NAME = "vercel_ai"
 
 MODEL_ATTRS = (
@@ -153,3 +161,81 @@ def build_params(span_attrs: dict, merged: dict[str, Any]) -> None:
             continue
         if canonical_key not in merged:
             merged[canonical_key] = val
+
+
+def normalize_messages(span_attrs: dict) -> Optional[dict]:
+    # ── Input side ───────────────────────────────────────────────────────
+    input_msgs: Optional[list] = None
+    prompt_messages = span_attrs.get("ai.prompt.messages")
+    if prompt_messages is not None:
+        coerced = coerce_to_messages(prompt_messages)
+        if coerced:
+            input_msgs = coerced
+    if input_msgs is None:
+        prompt = span_attrs.get("ai.prompt")
+        if isinstance(prompt, str) and prompt:
+            input_msgs = [text_message("user", prompt)]
+    # Tool execution span: input represents the tool invocation.
+    if input_msgs is None:
+        args = span_attrs.get("ai.toolCall.args")
+        tool_name = span_attrs.get("ai.toolCall.name")
+        if args is not None and isinstance(tool_name, str):
+            parsed_args = safe_json_parse(args) if isinstance(args, str) else args
+            if parsed_args is None and isinstance(args, str):
+                parsed_args = args
+            input_msgs = [{
+                "role": "assistant",
+                "parts": [tool_call_part(tool_name, parsed_args, None)],
+            }]
+
+    # ── Output side ──────────────────────────────────────────────────────
+    output_msgs: Optional[list] = None
+    response_text = span_attrs.get("ai.response.text")
+    if isinstance(response_text, str) and response_text:
+        output_msgs = [text_message("assistant", response_text)]
+
+    raw_tool_calls = span_attrs.get("ai.response.toolCalls")
+    if raw_tool_calls is not None:
+        parts = _parse_vercel_tool_calls(raw_tool_calls)
+        if parts:
+            if output_msgs and output_msgs[-1].get("role") == "assistant":
+                output_msgs[-1]["parts"] = list(output_msgs[-1].get("parts", [])) + parts
+            else:
+                synthesized = {"role": "assistant", "parts": parts}
+                output_msgs = (output_msgs or []) + [synthesized]
+
+    if output_msgs is None:
+        result = span_attrs.get("ai.toolCall.result")
+        if result is not None:
+            output_msgs = [{
+                "role": "tool",
+                "parts": [tool_call_response_part(result, None)],
+            }]
+
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _parse_vercel_tool_calls(raw: Any) -> list:
+    parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
+    if not isinstance(parsed, list):
+        return []
+    out: list = []
+    for tc in parsed:
+        if not isinstance(tc, dict):
+            continue
+        # Vercel uses {toolCallId, toolName, args} (camelCase, custom keys).
+        name = tc.get("toolName") if isinstance(tc.get("toolName"), str) else tc.get("name")
+        if not isinstance(name, str):
+            continue
+        call_id = (
+            tc.get("toolCallId") if isinstance(tc.get("toolCallId"), str)
+            else (tc.get("id") if isinstance(tc.get("id"), str) else None)
+        )
+        args = tc.get("args") if "args" in tc else tc.get("arguments")
+        parsed_args = safe_json_parse(args) if isinstance(args, str) else args
+        if parsed_args is None and isinstance(args, str):
+            parsed_args = args
+        out.append(tool_call_part(name, parsed_args, call_id))
+    return out

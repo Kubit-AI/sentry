@@ -17,6 +17,13 @@ import json
 from typing import Any, Optional
 
 from ..helpers import clean_discriminator
+from ..messages import (
+    coerce_to_messages,
+    generic_part,
+    stringify_for_text,
+    text_message,
+    unpack_indexed_messages,
+)
 
 NAME = "openinference"
 
@@ -161,3 +168,68 @@ def _unpack_indexed(span_attrs: dict, prefix: str) -> Optional[str]:
         return None
     ordered = [messages[i] for i in sorted(messages)]
     return json.dumps(ordered)
+
+
+def normalize_messages(span_attrs: dict) -> dict | None:
+    indexed_in = unpack_indexed_messages(span_attrs, _INPUT_INDEX_PREFIX, "message.")
+    indexed_out = unpack_indexed_messages(span_attrs, _OUTPUT_INDEX_PREFIX, "message.")
+
+    input_msgs = (
+        indexed_in
+        or _blob_to_messages(span_attrs.get("llm.input_messages"), "user")
+        or _blob_to_messages(span_attrs.get("llm.prompts"), "user")
+        or _blob_to_messages(span_attrs.get("input.value"), "user")
+    )
+    output_msgs = (
+        indexed_out
+        or _blob_to_messages(span_attrs.get("llm.output_messages"), "assistant")
+        or _blob_to_messages(span_attrs.get("llm.completions"), "assistant")
+        or _blob_to_messages(span_attrs.get("output.value"), "assistant")
+    )
+
+    # Retriever-span fallback: only on output, only when nothing else produced
+    # output messages. Encodes ``retrieval.documents.<i>.document.*`` as a
+    # single tool-role message holding one GenericPart per document.
+    if output_msgs is None:
+        doc_msg = _retrieval_docs_to_message(span_attrs)
+        if doc_msg is not None:
+            output_msgs = [doc_msg]
+
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _blob_to_messages(raw: Any, role: str) -> Optional[list]:
+    if raw is None:
+        return None
+    coerced = coerce_to_messages(raw)
+    if coerced:
+        return coerced
+    text = stringify_for_text(raw)
+    if not text:
+        return None
+    return [text_message(role, text)]
+
+
+def _retrieval_docs_to_message(span_attrs: dict) -> Optional[dict]:
+    buckets: dict[int, dict[str, Any]] = {}
+    prefix_len = len(_RETRIEVAL_DOCS_PREFIX)
+    for key, value in span_attrs.items():
+        if not isinstance(key, str) or not key.startswith(_RETRIEVAL_DOCS_PREFIX):
+            continue
+        rest = key[prefix_len:]
+        head, sep, inner = rest.partition(".")
+        if not sep:
+            continue
+        try:
+            idx = int(head)
+        except ValueError:
+            continue
+        if inner.startswith("document."):
+            inner = inner[len("document."):]
+        buckets.setdefault(idx, {})[inner] = value
+    if not buckets:
+        return None
+    parts = [generic_part("retrieval_document", buckets[i]) for i in sorted(buckets)]
+    return {"role": "tool", "parts": parts}

@@ -11,6 +11,14 @@
  */
 
 import { cleanDiscriminator } from "../helpers";
+import {
+  coerceToMessages,
+  genericPart,
+  stringifyForText,
+  textMessage,
+  unpackIndexedMessages,
+} from "../messages";
+import type { CanonicalMessages, Message, Part } from "./types";
 import { makeAdapter } from "./makeAdapter";
 
 const SPAN_KIND_ATTR = "openinference.span.kind";
@@ -109,4 +117,61 @@ export const adapter = makeAdapter({
       unpackIndexed(attrs, OUTPUT_INDEX_PREFIX) ?? unpackRetrievalDocs(attrs),
     ];
   },
+  normalizeMessages(attrs): CanonicalMessages | null {
+    const indexedIn = unpackIndexedMessages(attrs, INPUT_INDEX_PREFIX, "message.");
+    const indexedOut = unpackIndexedMessages(attrs, OUTPUT_INDEX_PREFIX, "message.");
+
+    let input = indexedIn ?? blobToMessages(attrs["llm.input_messages"], "user")
+      ?? blobToMessages(attrs["llm.prompts"], "user")
+      ?? blobToMessages(attrs["input.value"], "user");
+
+    let output = indexedOut ?? blobToMessages(attrs["llm.output_messages"], "assistant")
+      ?? blobToMessages(attrs["llm.completions"], "assistant")
+      ?? blobToMessages(attrs["output.value"], "assistant");
+
+    // Retriever-span fallback: only on output side, only when nothing else
+    // produced output messages. Encodes `retrieval.documents.<i>.document.*`
+    // as a single tool-role message holding one GenericPart per document.
+    if (output === null) {
+      const docMsg = retrievalDocsToMessage(attrs);
+      if (docMsg) output = [docMsg];
+    }
+
+    if (input === null && output === null) return null;
+    return { input, output };
+  },
 });
+
+function blobToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
+  if (raw === undefined || raw === null) return null;
+  const coerced = coerceToMessages(raw);
+  if (coerced && coerced.length > 0) return coerced;
+  const str = stringifyForText(raw);
+  if (!str) return null;
+  return [textMessage(role, str)];
+}
+
+function retrievalDocsToMessage(attrs: Record<string, unknown>): Message | null {
+  const buckets = new Map<number, Record<string, unknown>>();
+  for (const [key, value] of Object.entries(attrs)) {
+    if (!key.startsWith(RETRIEVAL_DOCS_PREFIX)) continue;
+    const rest = key.slice(RETRIEVAL_DOCS_PREFIX.length);
+    const dot = rest.indexOf(".");
+    if (dot === -1) continue;
+    const idx = Number(rest.slice(0, dot));
+    if (!Number.isInteger(idx)) continue;
+    let inner = rest.slice(dot + 1);
+    if (inner.startsWith("document.")) inner = inner.slice("document.".length);
+    let bucket = buckets.get(idx);
+    if (!bucket) {
+      bucket = {};
+      buckets.set(idx, bucket);
+    }
+    bucket[inner] = value;
+  }
+  if (buckets.size === 0) return null;
+  const parts: Part[] = [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, b]) => genericPart("retrieval_document", b));
+  return { role: "tool", parts };
+}

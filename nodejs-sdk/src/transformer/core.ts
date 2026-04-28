@@ -17,7 +17,12 @@ import {
   PROMPT_NAME_ATTRS,
   PROMPT_VERSION_ATTRS,
 } from "./frameworks/langfuse";
-import type { FrameworkAdapter } from "./frameworks/types";
+import type {
+  CanonicalMessages,
+  FrameworkAdapter,
+  Message,
+  Part,
+} from "./frameworks/types";
 import {
   firstAttr,
   hrDurationMs,
@@ -27,6 +32,14 @@ import {
   safeFloat,
   safeInt,
 } from "./helpers";
+import {
+  canonicalizeGenAiEvents,
+  safeJsonParse,
+  stringifyForText,
+  textMessage,
+  textPart,
+  type SpanEventLike,
+} from "./messages";
 import { DISCRIMINATOR_ORDER, FRAMEWORKS } from "./registry";
 
 const SPAN_KIND_MAP: Record<number, string> = {
@@ -205,6 +218,7 @@ export function transformSpans(
     }
 
     const traceEventIO = isRoot ? unpackGenAiEvents(span) : null;
+    const canonicalMessages = resolveCanonicalMessages(spanAttrs, span);
 
     if (isRoot && !emittedTraces.has(traceId)) {
       emittedTraces.add(traceId);
@@ -224,6 +238,8 @@ export function transformSpans(
           tags,
           input: resolveInput(spanAttrs) ?? traceEventIO?.[0] ?? null,
           output: resolveOutput(spanAttrs) ?? traceEventIO?.[1] ?? null,
+          input_messages: canonicalMessages.input,
+          output_messages: canonicalMessages.output,
           public: false,
           bookmarked: false,
           timestamp: startIso,
@@ -324,6 +340,8 @@ export function transformSpans(
         system_instructions: firstAttr(spanAttrs, SYSTEM_INSTRUCTIONS_ATTRS) ?? null,
         input: inputText,
         output: outputText,
+        input_messages: canonicalMessages.input,
+        output_messages: canonicalMessages.output,
         metadata: { ...metadata },
         provided_usage_details: usageDetails,
         usage_details: usageDetails,
@@ -449,6 +467,105 @@ function unpackGenAiEvents(
     ? JSON.stringify(outputs.sort(sortByTime).map((e) => e.msg))
     : null;
   return [inputStr, outputStr];
+}
+
+/**
+ * Build the canonical OTel GenAI v2 message arrays for both directions, in
+ * priority order:
+ *   1. Each adapter's `normalizeMessages` hook (registry order; per-side
+ *      first-non-null wins so a Vercel input + Langfuse output combo works).
+ *   2. Span-event fallback for emitters that put messages on
+ *      `gen_ai.user.message` / `gen_ai.choice` / etc. events rather than
+ *      attributes.
+ *   3. Best-effort text-wrap of the legacy `resolveInput`/`resolveOutput`
+ *      result for adapters that contribute INPUT_ATTRS but no normalizer
+ *      (defensive — every shipped adapter currently has a normalizer).
+ *   4. `gen_ai.system_instructions` injection: prepended as the leading
+ *      `role: "system"` message when not already present at the head of input.
+ */
+function resolveCanonicalMessages(
+  spanAttrs: Record<string, unknown>,
+  span: ReadableSpan,
+): CanonicalMessages {
+  let input: Message[] | null = null;
+  let output: Message[] | null = null;
+
+  for (const fw of FRAMEWORKS) {
+    if (input !== null && output !== null) break;
+    const r = fw.normalizeMessages?.(spanAttrs);
+    if (!r) continue;
+    if (input === null && r.input !== null) input = r.input;
+    if (output === null && r.output !== null) output = r.output;
+  }
+
+  if (input === null || output === null) {
+    const events = (span as unknown as { events?: SpanEventLike[] }).events;
+    const ev = canonicalizeGenAiEvents(events);
+    if (input === null) input = ev.input;
+    if (output === null) output = ev.output;
+  }
+
+  if (input === null) {
+    const legacy = resolveInput(spanAttrs);
+    if (legacy !== undefined && legacy !== null) {
+      const str = stringifyForText(legacy);
+      if (str) input = [textMessage("user", str)];
+    }
+  }
+  if (output === null) {
+    const legacy = resolveOutput(spanAttrs);
+    if (legacy !== undefined && legacy !== null) {
+      const str = stringifyForText(legacy);
+      if (str) output = [textMessage("assistant", str)];
+    }
+  }
+
+  const sysMsg = parseSystemInstructions(spanAttrs["gen_ai.system_instructions"]);
+  if (sysMsg) {
+    if (input === null || input.length === 0 || input[0].role !== "system") {
+      input = [sysMsg, ...(input ?? [])];
+    }
+  }
+
+  return { input, output };
+}
+
+/**
+ * Parse `gen_ai.system_instructions` (per OTel spec: an array of parts) into a
+ * canonical `system`-role message. Tolerates plain-string emitters (wraps as
+ * a single TextPart) and JSON-stringified arrays.
+ */
+function parseSystemInstructions(raw: unknown): Message | null {
+  if (raw === undefined || raw === null) return null;
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    const parsed = safeJsonParse(raw);
+    value = parsed ?? raw;
+  }
+  if (Array.isArray(value)) {
+    const parts: Part[] = [];
+    for (const item of value) {
+      if (typeof item === "string") {
+        parts.push(textPart(item));
+        continue;
+      }
+      if (item && typeof item === "object") {
+        const obj = item as Record<string, unknown>;
+        if (typeof obj.type === "string") {
+          parts.push(obj as Part);
+          continue;
+        }
+        // Fallback: stringify a structured value with no `type`.
+        parts.push(textPart(stringifyForText(item)));
+      }
+    }
+    if (parts.length === 0) return null;
+    return { role: "system", parts };
+  }
+  if (typeof value === "string" && value.length > 0) {
+    return { role: "system", parts: [textPart(value)] };
+  }
+  return null;
 }
 
 function buildModelParameters(spanAttrs: Record<string, unknown>): unknown {

@@ -11,6 +11,14 @@
  * `anthropic.messages` → `anthropic`, ...) via the `resolveProvider` hook.
  */
 
+import {
+  coerceToMessages,
+  safeJsonParse,
+  textMessage,
+  toolCallPart,
+  toolCallResponsePart,
+} from "../messages";
+import type { CanonicalMessages, Message, ToolCallRequestPart } from "./types";
 import { makeAdapter } from "./makeAdapter";
 
 // Vercel has emitted both camelCase (`topP`, `maxTokens`, …) and snake_case
@@ -103,4 +111,90 @@ export const adapter = makeAdapter({
       normaliseProvider(attrs["gen_ai.system"])
     );
   },
+  normalizeMessages(attrs): CanonicalMessages | null {
+    // ── Input side ───────────────────────────────────────────────────────
+    let input: Message[] | null = null;
+    const promptMessages = attrs["ai.prompt.messages"];
+    if (promptMessages !== undefined && promptMessages !== null) {
+      const coerced = coerceToMessages(promptMessages);
+      if (coerced && coerced.length > 0) input = coerced;
+    }
+    if (input === null && typeof attrs["ai.prompt"] === "string" && (attrs["ai.prompt"] as string).length > 0) {
+      input = [textMessage("user", attrs["ai.prompt"] as string)];
+    }
+    // Tool execution span: input represents the tool invocation.
+    if (input === null) {
+      const args = attrs["ai.toolCall.args"];
+      const toolName = attrs["ai.toolCall.name"];
+      if (args !== undefined && args !== null && typeof toolName === "string") {
+        const parsedArgs = typeof args === "string" ? safeJsonParse(args) ?? args : args;
+        input = [
+          {
+            role: "assistant",
+            parts: [toolCallPart(toolName, parsedArgs, null)],
+          },
+        ];
+      }
+    }
+
+    // ── Output side ──────────────────────────────────────────────────────
+    let output: Message[] | null = null;
+    const responseText = attrs["ai.response.text"];
+    if (typeof responseText === "string" && responseText.length > 0) {
+      output = [textMessage("assistant", responseText)];
+    }
+
+    // Merge tool-call invocations from the assistant.
+    const rawToolCalls = attrs["ai.response.toolCalls"];
+    if (rawToolCalls !== undefined && rawToolCalls !== null) {
+      const parts = parseVercelToolCalls(rawToolCalls);
+      if (parts.length > 0) {
+        if (output && output[output.length - 1].role === "assistant") {
+          output[output.length - 1].parts = [
+            ...output[output.length - 1].parts,
+            ...parts,
+          ];
+        } else {
+          const synthesized: Message = { role: "assistant", parts };
+          output = output ? [...output, synthesized] : [synthesized];
+        }
+      }
+    }
+
+    // Tool execution span: output is the tool result.
+    if (output === null) {
+      const result = attrs["ai.toolCall.result"];
+      if (result !== undefined && result !== null) {
+        output = [
+          { role: "tool", parts: [toolCallResponsePart(result, null)] },
+        ];
+      }
+    }
+
+    if (input === null && output === null) return null;
+    return { input, output };
+  },
 });
+
+function parseVercelToolCalls(raw: unknown): ToolCallRequestPart[] {
+  const parsed = typeof raw === "string" ? safeJsonParse(raw) : raw;
+  if (!Array.isArray(parsed)) return [];
+  const out: ToolCallRequestPart[] = [];
+  for (const tc of parsed) {
+    if (!tc || typeof tc !== "object") continue;
+    const obj = tc as Record<string, unknown>;
+    // Vercel uses { toolCallId, toolName, args } (camelCase, custom keys).
+    const name =
+      (typeof obj.toolName === "string" ? obj.toolName : undefined) ??
+      (typeof obj.name === "string" ? obj.name : undefined);
+    if (!name) continue;
+    const id =
+      (typeof obj.toolCallId === "string" ? obj.toolCallId : undefined) ??
+      (typeof obj.id === "string" ? obj.id : undefined) ??
+      null;
+    const args = obj.args ?? obj.arguments;
+    const parsedArgs = typeof args === "string" ? safeJsonParse(args) ?? args : args;
+    out.push(toolCallPart(name, parsedArgs, id));
+  }
+  return out;
+}

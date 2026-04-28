@@ -48,6 +48,7 @@ export function makeAdapter(overrides: AdapterOverrides): FrameworkAdapter {
     parseCostBlobs: overrides.parseCostBlobs,
     buildParams: overrides.buildParams,
     unpackMessages: overrides.unpackMessages,
+    normalizeMessages: overrides.normalizeMessages,
     enrichMetadata: overrides.enrichMetadata,
   };
 }
