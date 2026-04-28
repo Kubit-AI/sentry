@@ -23,6 +23,13 @@ Attribute naming in OpenInference relies primarily on the `llm.*` and `embedding
 | `output.value` | `gen_ai.output.messages` | OI often serializes outputs into a single string or JSON value. |
 | `llm.cost.total` | Backend Calculated (No OTel direct equivalent) | OI explicitly places monetary cost (in USD) on the span. |
 | `embedding.model_name` | `gen_ai.request.model` | OI separates embedding attributes from LLM attributes entirely. |
+| `llm.cost.prompt` / `llm.cost.completion` / `llm.cost.total` | (no OTel equivalent — backend-calculated) | OI emits per-call USD cost on the span; adapter surfaces these as `input_cost` / `output_cost` / `total_cost` on the enriched observation. |
+| `tag.tags` | (no direct OTel equivalent; cf. `gen_ai.system` for system identification) | OI's free-form tag list; surfaced as `tags`. |
+| `llm.time_to_first_token` | (no OTel equivalent — backend-calculated) | OI emits TTFT (ms) directly on the span; adapter surfaces as `time_to_first_token`. |
+| `llm.token_count.prompt_details.cache_read` | `gen_ai.usage.cache_read.input_tokens` | Cached-prompt token reuse; OI nests under `prompt_details`. |
+| `llm.token_count.prompt_details.cache_write` | `gen_ai.usage.cache_creation.input_tokens` | Cache-write tokens; OI nests under `prompt_details`. |
+| `llm.token_count.completion_details.reasoning` | (no direct OTel equivalent) | Reasoning-trace token accounting (e.g. o1-style models); OI nests under `completion_details`. |
+| `llm.invocation_parameters` | `gen_ai.request.<param>` (multiple) | OI captures all hyperparameters as a single JSON blob; adapter parses and merges into the per-key `params.*` shape that OTel splits across distinct `gen_ai.request.*` keys. |
 
 A notable architectural divergence is OpenInference's explicit inclusion of cost metrics directly on the span. Attributes such as `llm.cost.prompt`, `llm.cost.completion`, and `llm.cost.total` represent monetary values (in USD) calculated at runtime. The official OTel GenAI specification generally omits direct cost tracking on the telemetry layer, explicitly delegating price calculations to the downstream observability backend based on token metrics and dynamic provider lookup tables. To unify these systems in production environments, infrastructure teams deploy OpenTelemetry Collector Contrib components like the `genaisemconv` processor, which intercepts telemetry in transit, rewriting `llm.model_name` to `gen_ai.request.model` and dropping redundant attributes to ensure compatibility with modern OTel backends.
 
