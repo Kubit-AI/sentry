@@ -358,7 +358,7 @@ function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {
  */
 function rewriteToolNameRoles(messages: Message[] | null): Message[] | null {
   if (!messages || messages.length === 0) return messages;
-  const canonical = new Set(["system", "user", "assistant", "tool"]);
+  const canonical = new Set(["system", "developer", "user", "assistant", "tool"]);
   const nameToId = new Map<string, string | null>();
   const out: Message[] = [];
   for (const m of messages) {

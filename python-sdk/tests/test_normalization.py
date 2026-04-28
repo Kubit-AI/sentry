@@ -805,6 +805,22 @@ class TestLangfuseNormalizer:
             "parts": [{"type": "text", "content": "47 + 38 = 85"}],
         }
 
+    def test_preserves_developer_role_and_does_not_rewrite_to_tool(self):
+        span = _mock_span(attrs={
+            "langfuse.observation.input": json.dumps([
+                {"role": "developer", "content": "Always respond as strict JSON."},
+                {"role": "user", "content": "hi"},
+            ]),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {
+                "role": "developer",
+                "parts": [{"type": "text", "content": "Always respond as strict JSON."}],
+            },
+            {"role": "user", "parts": [{"type": "text", "content": "hi"}]},
+        ]
+
     # The Langfuse Python LangChain integration serializes a ToolMessage as a
     # plain ``BaseMessage.dict()`` blob — ``{type:"tool", content,
     # tool_call_id, name, ...}`` — without the ``lc:1, type:"constructor"``

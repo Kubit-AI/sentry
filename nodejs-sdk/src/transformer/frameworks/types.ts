@@ -16,7 +16,7 @@
 // Each part variant has additionalProperties:true upstream — adapters may
 // attach extra namespaced fields without breaking the schema.
 
-export type Role = "system" | "user" | "assistant" | "tool" | string;
+export type Role = "system" | "developer" | "user" | "assistant" | "tool" | string;
 export type Modality = "image" | "video" | "audio" | string;
 export type FinishReason =
   | "stop"

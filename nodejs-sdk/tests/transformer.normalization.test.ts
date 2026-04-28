@@ -876,6 +876,23 @@ describe("langfuse normalizer", () => {
     });
   });
 
+  it("preserves developer role and does not rewrite it to tool", () => {
+    const attrs: Record<string, unknown> = {
+      "langfuse.observation.input": JSON.stringify([
+        { role: "developer", content: "Always respond as strict JSON." },
+        { role: "user", content: "hi" },
+      ]),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      {
+        role: "developer",
+        parts: [{ type: "text", content: "Always respond as strict JSON." }],
+      },
+      { role: "user", parts: [{ type: "text", content: "hi" }] },
+    ]);
+  });
+
   // The Langfuse Python LangChain integration serializes a ToolMessage as a
   // plain `BaseMessage.dict()` blob — `{type:"tool", content, tool_call_id,
   // name, ...}` — without the `lc:1, type:"constructor"` Serializable

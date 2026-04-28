@@ -373,7 +373,7 @@ def _rewrite_tool_name_roles(messages: Optional[list]) -> Optional[list]:
     """
     if not messages:
         return messages
-    canonical = {"system", "user", "assistant", "tool"}
+    canonical = {"system", "developer", "user", "assistant", "tool"}
     name_to_id: dict = {}
     out: list = []
     for m in messages:
