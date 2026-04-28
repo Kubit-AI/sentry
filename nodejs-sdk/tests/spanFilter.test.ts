@@ -8,7 +8,7 @@ import {
   isGenAISpan,
   isKnownLLMInstrumentor,
   isKubitSpan,
-} from "./spanFilter";
+} from "../src/spanFilter";
 
 function makeSpan(opts: {
   scopeName?: string | null;
@@ -122,7 +122,7 @@ describe("known prefixes includes kubit", () => {
 describe("KubitSpanProcessor filtering", () => {
   async function loadProcessor() {
     vi.resetModules();
-    vi.doMock("./exporter", () => ({
+    vi.doMock("../src/exporter", () => ({
       KubitExporter: class {
         export() {}
         shutdown() {
@@ -133,7 +133,7 @@ describe("KubitSpanProcessor filtering", () => {
         }
       },
     }));
-    return (await import("./processor")).KubitSpanProcessor;
+    return (await import("../src/processor")).KubitSpanProcessor;
   }
 
   // Stub the BatchSpanProcessor's onEnd on the grandparent prototype so we can

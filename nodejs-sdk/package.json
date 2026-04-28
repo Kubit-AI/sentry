@@ -30,7 +30,8 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest"
   },

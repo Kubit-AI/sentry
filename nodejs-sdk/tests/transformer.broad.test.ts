@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
-import { transformSpans } from "./transformer";
+import { transformSpans } from "../src/transformer";
 
 type SpanEventInput = {
   name: string;

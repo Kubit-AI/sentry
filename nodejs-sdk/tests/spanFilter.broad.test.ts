@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
-import { isKnownLLMInstrumentor } from "./spanFilter";
+import { isKnownLLMInstrumentor } from "../src/spanFilter";
 
 function makeSpan(opts: {
   scopeName?: string | null;
