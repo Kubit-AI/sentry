@@ -235,8 +235,11 @@ def _parse_vercel_tool_calls(raw: Any) -> list:
         # (camelCase, with `input` rather than `args`/`arguments`). Older
         # shapes and other emitters may use `args` or `arguments`; fall
         # through.
-        name = tc.get("toolName") if isinstance(tc.get("toolName"), str) else tc.get("name")
-        if not isinstance(name, str):
+        name = (
+            tc.get("toolName") if isinstance(tc.get("toolName"), str)
+            else (tc.get("name") if isinstance(tc.get("name"), str) else None)
+        )
+        if not name:
             continue
         call_id = (
             tc.get("toolCallId") if isinstance(tc.get("toolCallId"), str)
