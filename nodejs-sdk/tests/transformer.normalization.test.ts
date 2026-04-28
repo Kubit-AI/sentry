@@ -185,6 +185,167 @@ describe("openinference normalizer", () => {
   });
 });
 
+describe("openinference normalizer (LangChain envelope)", () => {
+  // LangChain Serializable shape:
+  //   {lc:1, type:"constructor", id:["langchain_core","messages",<MsgType>], kwargs:{...}}
+  const lcMsg = (type: string, kwargs: Record<string, unknown>) => ({
+    lc: 1,
+    type: "constructor",
+    id: ["langchain_core", "messages", type],
+    kwargs,
+  });
+
+  it("translates {messages: [HumanMessage]} input.value blob", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "input.value": JSON.stringify({
+        messages: [lcMsg("HumanMessage", { content: "What is 2+2?" })],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "What is 2+2?" }] },
+    ]);
+  });
+
+  it("translates AIMessage with content-array tool_use parts (Anthropic-shape)", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "output.value": JSON.stringify(
+        lcMsg("AIMessage", {
+          content: [{ type: "tool_use", id: "toolu_1", name: "add", input: { a: 1, b: 2 } }],
+        }),
+      ),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "add", id: "toolu_1", arguments: { a: 1, b: 2 } }],
+      },
+    ]);
+  });
+
+  it("translates AIMessage with kwargs.tool_calls only", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "output.value": JSON.stringify(
+        lcMsg("AIMessage", {
+          content: "calling add",
+          tool_calls: [{ name: "add", args: { a: 1, b: 2 }, id: "toolu_2", type: "tool_call" }],
+        }),
+      ),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "text", content: "calling add" },
+          { type: "tool_call", name: "add", id: "toolu_2", arguments: { a: 1, b: 2 } },
+        ],
+      },
+    ]);
+  });
+
+  it("dedupes when content-array tool_use AND kwargs.tool_calls share the same id", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "output.value": JSON.stringify(
+        lcMsg("AIMessage", {
+          content: [{ type: "tool_use", id: "toolu_3", name: "add", input: { a: 1 } }],
+          tool_calls: [{ name: "add", args: { a: 1 }, id: "toolu_3", type: "tool_call" }],
+        }),
+      ),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    const parts = asMessages(r.output_messages)[0].parts;
+    expect(parts).toEqual([
+      { type: "tool_call", name: "add", id: "toolu_3", arguments: { a: 1 } },
+    ]);
+  });
+
+  it("translates ToolMessage with kwargs.tool_call_id", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "input.value": JSON.stringify({
+        messages: [lcMsg("ToolMessage", { content: "85", tool_call_id: "toolu_4", name: "add" })],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "85", id: "toolu_4" }],
+        name: "add",
+      },
+    ]);
+  });
+
+  it("translates SystemMessage", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "input.value": JSON.stringify({
+        messages: [lcMsg("SystemMessage", { content: "Be terse." })],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "system", parts: [{ type: "text", content: "Be terse." }] },
+    ]);
+  });
+
+  it("translates a full Human → AIMessage(tool_calls) → Tool → AIMessage transcript", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "input.value": JSON.stringify({
+        messages: [
+          lcMsg("HumanMessage", { content: "What is 47 + 38?" }),
+          lcMsg("AIMessage", {
+            content: [{ type: "tool_use", id: "toolu_x", name: "add", input: { a: 47, b: 38 } }],
+            tool_calls: [{ name: "add", args: { a: 47, b: 38 }, id: "toolu_x", type: "tool_call" }],
+          }),
+          lcMsg("ToolMessage", { content: "85", tool_call_id: "toolu_x", name: "add" }),
+          lcMsg("AIMessage", { content: "47 + 38 = 85" }),
+        ],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    const msgs = asMessages(r.input_messages);
+    expect(msgs).toHaveLength(4);
+    expect(msgs[0].role).toBe("user");
+    expect(msgs[1].role).toBe("assistant");
+    expect(msgs[1].parts).toEqual([
+      { type: "tool_call", name: "add", id: "toolu_x", arguments: { a: 47, b: 38 } },
+    ]);
+    expect(msgs[2].role).toBe("tool");
+    expect(msgs[2].parts[0]).toMatchObject({
+      type: "tool_call_response",
+      response: "85",
+      id: "toolu_x",
+    });
+    expect(msgs[3]).toEqual({
+      role: "assistant",
+      parts: [{ type: "text", content: "47 + 38 = 85" }],
+    });
+  });
+
+  it("recognizes a bare-array Serializable input.value (no {messages:...} wrapper)", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "llm",
+      "input.value": JSON.stringify([
+        lcMsg("HumanMessage", { content: "hi" }),
+        lcMsg("AIMessage", { content: "hello" }),
+      ]),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "hi" }] },
+      { role: "assistant", parts: [{ type: "text", content: "hello" }] },
+    ]);
+  });
+});
+
 describe("traceloop normalizer", () => {
   it("rebuilds indexed flat gen_ai.prompt / gen_ai.completion", () => {
     const attrs: Record<string, unknown> = {

@@ -13,9 +13,14 @@
 import { cleanDiscriminator } from "../helpers";
 import {
   coerceToMessages,
+  findLangchainModelProvider,
   genericPart,
+  langchainEnvelopeToCanonical,
+  safeJsonParse,
   stringifyForText,
   textMessage,
+  toolCallPart,
+  toolCallResponsePart,
   unpackIndexedMessages,
 } from "../messages";
 import type { CanonicalMessages, Message, Part } from "./types";
@@ -99,6 +104,7 @@ export const adapter = makeAdapter({
   TAGS_ATTRS: ["tag.tags"],
   TIME_TO_FIRST_TOKEN_ATTRS: ["llm.time_to_first_token"],
   PROVIDER_ATTRS: ["llm.system", "llm.provider"],
+  TOOL_NAME_ATTRS: ["tool.name"],
   CACHE_TOKEN_MAP: [
     ["llm.token_count.prompt_details.cache_read", "cache_read_input"],
     ["llm.token_count.prompt_details.cache_write", "cache_creation_input"],
@@ -111,27 +117,59 @@ export const adapter = makeAdapter({
     if (oi === "llm") return "GENERATION";
     return oi.toUpperCase();
   },
+  resolveProvider(attrs) {
+    // OpenInference's own llm.provider / llm.system aliases handle the common
+    // case via PROVIDER_ATTRS in core. This hook handles LangChain, where the
+    // provider lives inside the AIMessage envelope on output.value.
+    return findLangchainModelProvider(attrs["output.value"]);
+  },
   unpackMessages(attrs) {
     return [
       unpackIndexed(attrs, INPUT_INDEX_PREFIX),
       unpackIndexed(attrs, OUTPUT_INDEX_PREFIX) ?? unpackRetrievalDocs(attrs),
     ];
   },
+  aggregateToolDefinitions(attrs) {
+    const tools = new Map<number, unknown>();
+    const re = /^llm\.tools\.(\d+)\.tool\.json_schema$/;
+    for (const [k, v] of Object.entries(attrs)) {
+      const m = re.exec(k);
+      if (!m) continue;
+      const idx = Number(m[1]);
+      if (!Number.isInteger(idx)) continue;
+      const parsed = typeof v === "string" ? safeJsonParse(v) ?? v : v;
+      tools.set(idx, parsed);
+    }
+    if (tools.size === 0) return null;
+    return [...tools.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+  },
   normalizeMessages(attrs): CanonicalMessages | null {
-    const indexedIn = unpackIndexedMessages(attrs, INPUT_INDEX_PREFIX, "message.");
+    // Try LangChain Serializable envelope first — it's structurally richer
+    // than the indexed projection (which loses tool_use parts on assistant
+    // messages). Only fires when the blob actually IS a LangChain shape;
+    // otherwise returns null and we fall through to the existing cascade.
+    const lcIn  = langchainBlob(attrs["input.value"])  ?? langchainBlob(attrs["llm.input_messages"]);
+    const lcOut = langchainBlob(attrs["output.value"]) ?? langchainBlob(attrs["llm.output_messages"]);
+
+    const indexedIn  = unpackIndexedMessages(attrs, INPUT_INDEX_PREFIX,  "message.");
     const indexedOut = unpackIndexedMessages(attrs, OUTPUT_INDEX_PREFIX, "message.");
 
-    let input = indexedIn ?? blobToMessages(attrs["llm.input_messages"], "user")
-      ?? blobToMessages(attrs["llm.prompts"], "user")
-      ?? blobToMessages(attrs["input.value"], "user");
+    // TOOL-span synthesis: for spans where `tool.name` + raw-args input +
+    // ToolMessage envelope output is the LangChain shape, synthesis is
+    // strictly better than the text-wrap fallback (which would wrap the
+    // args JSON as a user text part). Returns null/null for non-TOOL spans.
+    const synth = synthesizeToolSpanMessages(attrs);
 
-    let output = indexedOut ?? blobToMessages(attrs["llm.output_messages"], "assistant")
-      ?? blobToMessages(attrs["llm.completions"], "assistant")
-      ?? blobToMessages(attrs["output.value"], "assistant");
+    let input  = lcIn  ?? indexedIn  ?? synth.input
+                                    ?? blobToMessages(attrs["llm.input_messages"],  "user")
+                                    ?? blobToMessages(attrs["llm.prompts"],         "user")
+                                    ?? blobToMessages(attrs["input.value"],         "user");
+    let output = lcOut ?? indexedOut ?? synth.output
+                                    ?? blobToMessages(attrs["llm.output_messages"], "assistant")
+                                    ?? blobToMessages(attrs["llm.completions"],     "assistant")
+                                    ?? blobToMessages(attrs["output.value"],        "assistant");
 
-    // Retriever-span fallback: only on output side, only when nothing else
-    // produced output messages. Encodes `retrieval.documents.<i>.document.*`
-    // as a single tool-role message holding one GenericPart per document.
+    // Retriever-span fallback (unchanged).
     if (output === null) {
       const docMsg = retrievalDocsToMessage(attrs);
       if (docMsg) output = [docMsg];
@@ -142,13 +180,62 @@ export const adapter = makeAdapter({
   },
 });
 
+function langchainBlob(raw: unknown): Message[] | null {
+  if (raw === undefined || raw === null) return null;
+  const parsed = typeof raw === "string" ? safeJsonParse(raw) ?? raw : raw;
+  return langchainEnvelopeToCanonical(parsed);
+}
+
 function blobToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
   if (raw === undefined || raw === null) return null;
+  // 1. LangChain Serializable envelope (richer than coerced OpenAI form) wins.
+  const lc = langchainBlob(raw);
+  if (lc && lc.length > 0) return lc;
+  // 2. Existing OpenAI-shape coercion.
   const coerced = coerceToMessages(raw);
   if (coerced && coerced.length > 0) return coerced;
+  // 3. Last-resort text wrap.
   const str = stringifyForText(raw);
   if (!str) return null;
   return [textMessage(role, str)];
+}
+
+function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {
+  input: Message[] | null;
+  output: Message[] | null;
+} {
+  if (cleanDiscriminator(attrs[SPAN_KIND_ATTR]) !== "tool") {
+    return { input: null, output: null };
+  }
+  const toolName = typeof attrs["tool.name"] === "string"
+    ? (attrs["tool.name"] as string)
+    : null;
+  if (!toolName) return { input: null, output: null };
+
+  const rawIn = attrs["input.value"];
+  const argsParsed = typeof rawIn === "string"
+    ? safeJsonParse(rawIn) ?? rawIn
+    : rawIn;
+  const input: Message[] = [{
+    role: "assistant",
+    parts: [toolCallPart(toolName, argsParsed, null)],
+  }];
+
+  const rawOut = attrs["output.value"];
+  const parsedOut = typeof rawOut === "string"
+    ? safeJsonParse(rawOut) ?? rawOut
+    : rawOut;
+  let output: Message[] | null = null;
+  // First try: full LangChain envelope (handles {output:<ToolMessage>}, bare
+  // ToolMessage, etc.) — gives us a tool message with `tool_call_id` linked.
+  const lcOut = langchainEnvelopeToCanonical(parsedOut);
+  if (lcOut && lcOut.length > 0) {
+    output = lcOut;
+  } else if (parsedOut !== null && parsedOut !== undefined) {
+    output = [{ role: "tool", parts: [toolCallResponsePart(parsedOut, null)] }];
+  }
+
+  return { input, output };
 }
 
 function retrievalDocsToMessage(attrs: Record<string, unknown>): Message | null {

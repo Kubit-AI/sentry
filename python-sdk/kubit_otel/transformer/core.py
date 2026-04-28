@@ -336,7 +336,8 @@ def transform_spans(
             "prompt_id": first_attr(span_attrs, _langfuse.PROMPT_ID_ATTRS),
             "prompt_name": first_attr(span_attrs, _langfuse.PROMPT_NAME_ATTRS),
             "prompt_version": safe_int(first_attr(span_attrs, _langfuse.PROMPT_VERSION_ATTRS)),
-            "tool_definitions": first_attr(span_attrs, TOOL_DEFINITIONS_ATTRS),
+            "tool_definitions": _aggregate_tool_definitions(span_attrs)
+                                or first_attr(span_attrs, TOOL_DEFINITIONS_ATTRS),
             "tool_calls": first_attr(span_attrs, TOOL_CALLS_ATTRS),
             "tool_call_names": first_attr(span_attrs, TOOL_CALL_NAMES_ATTRS),
             "tags": tags,
@@ -465,6 +466,21 @@ def _resolve_provider(span_attrs: dict) -> Optional[str]:
         if val is None:
             continue
         return val if isinstance(val, str) else str(val)
+    return None
+
+
+def _aggregate_tool_definitions(span_attrs: dict) -> Optional[list]:
+    """Aggregate ``tool_definitions`` from non-blob sources (e.g. indexed
+    ``llm.tools.<n>.tool.json_schema``). First non-empty adapter result wins;
+    falls back to ``first_attr(TOOL_DEFINITIONS_ATTRS)`` in the caller.
+    """
+    for fw in FRAMEWORKS:
+        agg = getattr(fw, "aggregate_tool_definitions", None)
+        if agg is None:
+            continue
+        result = agg(span_attrs)
+        if result:
+            return result
     return None
 
 

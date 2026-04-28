@@ -126,12 +126,13 @@ export const adapter = makeAdapter({
     if (input === null) {
       const args = attrs["ai.toolCall.args"];
       const toolName = attrs["ai.toolCall.name"];
+      const toolCallId = typeof attrs["ai.toolCall.id"] === "string" ? (attrs["ai.toolCall.id"] as string) : null;
       if (args !== undefined && args !== null && typeof toolName === "string") {
         const parsedArgs = typeof args === "string" ? safeJsonParse(args) ?? args : args;
         input = [
           {
             role: "assistant",
-            parts: [toolCallPart(toolName, parsedArgs, null)],
+            parts: [toolCallPart(toolName, parsedArgs, toolCallId)],
           },
         ];
       }
@@ -165,8 +166,9 @@ export const adapter = makeAdapter({
     if (output === null) {
       const result = attrs["ai.toolCall.result"];
       if (result !== undefined && result !== null) {
+        const toolCallId = typeof attrs["ai.toolCall.id"] === "string" ? (attrs["ai.toolCall.id"] as string) : null;
         output = [
-          { role: "tool", parts: [toolCallResponsePart(result, null)] },
+          { role: "tool", parts: [toolCallResponsePart(result, toolCallId)] },
         ];
       }
     }
@@ -183,7 +185,9 @@ function parseVercelToolCalls(raw: unknown): ToolCallRequestPart[] {
   for (const tc of parsed) {
     if (!tc || typeof tc !== "object") continue;
     const obj = tc as Record<string, unknown>;
-    // Vercel uses { toolCallId, toolName, args } (camelCase, custom keys).
+    // Vercel uses { toolCallId, toolName, input } in ai.response.toolCalls
+    // (camelCase, with `input` rather than `args`/`arguments`). Older shapes
+    // and other emitters may use `args` or `arguments`; fall through.
     const name =
       (typeof obj.toolName === "string" ? obj.toolName : undefined) ??
       (typeof obj.name === "string" ? obj.name : undefined);
@@ -192,7 +196,7 @@ function parseVercelToolCalls(raw: unknown): ToolCallRequestPart[] {
       (typeof obj.toolCallId === "string" ? obj.toolCallId : undefined) ??
       (typeof obj.id === "string" ? obj.id : undefined) ??
       null;
-    const args = obj.args ?? obj.arguments;
+    const args = obj.input ?? obj.args ?? obj.arguments;
     const parsedArgs = typeof args === "string" ? safeJsonParse(args) ?? args : args;
     out.push(toolCallPart(name, parsedArgs, id));
   }

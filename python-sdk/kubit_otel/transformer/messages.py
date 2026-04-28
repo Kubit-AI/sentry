@@ -222,6 +222,25 @@ def _openai_content_part_to_canonical(raw: Any) -> Optional[Part]:
     type_ = raw.get("type")
     if type_ == "text" and isinstance(raw.get("text"), str):
         return text_part(raw["text"])
+    # Vercel AI SDK uses kebab-case content parts inside ai.prompt.messages
+    # for tool invocations and results. Map them to canonical snake_case
+    # parts so consumers don't have to know about the Vercel-specific shape.
+    if type_ == "tool-call" and isinstance(raw.get("toolName"), str):
+        call_id = raw.get("toolCallId") if isinstance(raw.get("toolCallId"), str) else None
+        raw_args = raw.get("input")
+        if raw_args is None:
+            raw_args = raw.get("args")
+        if raw_args is None:
+            raw_args = raw.get("arguments")
+        if isinstance(raw_args, str):
+            parsed = safe_json_parse(raw_args)
+            args = parsed if parsed is not None else raw_args
+        else:
+            args = raw_args
+        return tool_call_part(raw["toolName"], args, call_id)
+    if type_ == "tool-result":
+        call_id = raw.get("toolCallId") if isinstance(raw.get("toolCallId"), str) else None
+        return tool_call_response_part(_unwrap_vercel_tool_result(raw.get("output")), call_id)
     if type_ == "image_url":
         image_url = raw.get("image_url")
         url = image_url if isinstance(image_url, str) else (image_url or {}).get("url")
@@ -250,6 +269,22 @@ def _parse_image_url(url: str) -> Part:
     if m:
         return blob_part("image", m.group(2), m.group(1))
     return uri_part("image", url)
+
+
+def _unwrap_vercel_tool_result(output: Any) -> Any:
+    """Unwrap Vercel AI SDK's tool-result ``output`` envelope, which uses a
+    discriminated ``{type, value}`` shape (e.g. ``{type: "json", value: 85}``,
+    ``{type: "text", value: "..."}``, ``{type: "error-text", value: "..."}``).
+    Returns the inner value for the common ``text`` / ``json`` /
+    ``error-text`` / ``error-json`` variants and passes the envelope through
+    unchanged for any other shape so nothing is lost.
+    """
+    if not isinstance(output, dict):
+        return output
+    t = output.get("type")
+    if t in ("text", "json", "error-text", "error-json") and "value" in output:
+        return output["value"]
+    return output
 
 
 # ── Pydantic AI envelope translator ────────────────────────────────────────
@@ -340,6 +375,213 @@ def _pydantic_ai_response_to_message(parts: list) -> Optional[Message]:
     if not canonical:
         return None
     return {"role": "assistant", "parts": canonical}
+
+
+# ── LangChain Serializable envelope translator ─────────────────────────────
+#
+# LangChain (JS via ``@arizeai/openinference-instrumentation-langchain``,
+# Python via ``openinference.instrumentation.langchain``) emits message
+# envelopes inside ``input.value`` / ``output.value`` blobs as LangChain
+# ``Serializable`` objects:
+#
+#   {"lc": 1, "type": "constructor",
+#    "id": ["langchain_core", "messages", "HumanMessage" | "AIMessage" | ...],
+#    "kwargs": {"content": ..., "tool_calls"?: [...], "tool_call_id"?: ..., ...}}
+#
+# Wrappers vary: ``{"messages": [...]}`` (most common), bare list, single
+# Serializable, ``{"output": <ToolMessage>}`` (LangGraph TOOL span output
+# convention), ``{"input": ...}`` (some chain nodes). Callers should treat a
+# ``None`` return as "not LangChain shape, fall through."
+
+
+def _is_langchain_message_serializable(v: Any) -> bool:
+    if not isinstance(v, dict):
+        return False
+    if v.get("lc") != 1:
+        return False
+    id_ = v.get("id")
+    if not isinstance(id_, list) or len(id_) < 2:
+        return False
+    return id_[-2] == "messages"
+
+
+def _unwrap_langchain_envelope(value: Any) -> Optional[list]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parsed = safe_json_parse(value)
+        if parsed is None:
+            return None
+        return _unwrap_langchain_envelope(parsed)
+    if isinstance(value, list):
+        return value if any(_is_langchain_message_serializable(x) for x in value) else None
+    if not isinstance(value, dict):
+        return None
+    if isinstance(value.get("messages"), list):
+        return value["messages"]
+    if "output" in value:
+        out = value["output"]
+        if isinstance(out, list) and any(_is_langchain_message_serializable(x) for x in out):
+            return out
+        if _is_langchain_message_serializable(out):
+            return [out]
+    if "input" in value:
+        return _unwrap_langchain_envelope(value["input"])
+    if _is_langchain_message_serializable(value):
+        return [value]
+    return None
+
+
+def langchain_envelope_to_canonical(raw: Any) -> Optional[list]:
+    items = _unwrap_langchain_envelope(raw)
+    if not items:
+        return None
+    out: list = []
+    for item in items:
+        msg = _langchain_serializable_to_message(item)
+        if msg:
+            out.append(msg)
+    return out if out else None
+
+
+def _langchain_serializable_to_message(item: Any) -> Optional[Message]:
+    if not _is_langchain_message_serializable(item):
+        # Lenient: accept plain ``{"role": ..., "content": ...}`` items mixed
+        # with Serializables (the empirical __start__ envelope produces this).
+        if isinstance(item, dict) and isinstance(item.get("role"), str):
+            return openai_message_to_canonical(item)
+        return None
+    id_arr = item["id"]
+    lc_type = str(id_arr[-1])
+    kwargs = item.get("kwargs") if isinstance(item.get("kwargs"), dict) else {}
+    content = kwargs.get("content")
+
+    if lc_type == "HumanMessage":
+        return _langchain_text_only_message("user", content)
+    if lc_type == "SystemMessage":
+        return _langchain_text_only_message("system", content)
+    if lc_type in ("AIMessage", "AIMessageChunk"):
+        parts = _ai_message_content_and_tool_calls_to_parts(content, kwargs.get("tool_calls"))
+        if not parts:
+            return None
+        return {"role": "assistant", "parts": parts}
+    if lc_type == "ToolMessage":
+        call_id = kwargs.get("tool_call_id") if isinstance(kwargs.get("tool_call_id"), str) else None
+        msg: Message = {
+            "role": "tool",
+            "parts": [tool_call_response_part(content if content is not None else None, call_id)],
+        }
+        if isinstance(kwargs.get("name"), str):
+            msg["name"] = kwargs["name"]
+        return msg
+    if lc_type == "FunctionMessage":
+        msg = {
+            "role": "tool",
+            "parts": [tool_call_response_part(content if content is not None else None, None)],
+        }
+        if isinstance(kwargs.get("name"), str):
+            msg["name"] = kwargs["name"]
+        return msg
+    if lc_type == "ChatMessage":
+        role = kwargs.get("role") if isinstance(kwargs.get("role"), str) else "user"
+        return _langchain_text_only_message(role, content)
+    return None
+
+
+def _langchain_text_only_message(role: str, content: Any) -> Optional[Message]:
+    parts = _langchain_content_to_parts(content)
+    if not parts:
+        return None
+    return {"role": role, "parts": parts}
+
+
+def _langchain_content_to_parts(content: Any) -> list:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [text_part(content)] if content else []
+    if isinstance(content, list):
+        out: list = []
+        for item in content:
+            if isinstance(item, str):
+                if item:
+                    out.append(text_part(item))
+                continue
+            if not isinstance(item, dict):
+                continue
+            t = item.get("type")
+            if t == "text" and isinstance(item.get("text"), str):
+                if item["text"]:
+                    out.append(text_part(item["text"]))
+                continue
+            # Anthropic-shape inline tool call carried inside the content array.
+            if t == "tool_use" and isinstance(item.get("name"), str):
+                call_id = item.get("id") if isinstance(item.get("id"), str) else None
+                out.append(tool_call_part(item["name"], item.get("input"), call_id))
+                continue
+            oai = _openai_content_part_to_canonical(item)
+            if oai is not None:
+                out.append(oai)
+                continue
+            if isinstance(t, str):
+                out.append(generic_part(t, item))
+        return out
+    s = stringify_for_text(content)
+    return [text_part(s)] if s else []
+
+
+def _ai_message_content_and_tool_calls_to_parts(content: Any, tool_calls: Any) -> list:
+    parts = _langchain_content_to_parts(content)
+    seen_ids: set = set()
+    for p in parts:
+        if p.get("type") == "tool_call" and isinstance(p.get("id"), str):
+            seen_ids.add(p["id"])
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name") if isinstance(tc.get("name"), str) else None
+            if not name:
+                continue
+            call_id = tc.get("id") if isinstance(tc.get("id"), str) else None
+            if call_id is not None and call_id in seen_ids:
+                continue
+            args = tc.get("args")
+            if args is None:
+                args = tc.get("arguments")
+            parts.append(tool_call_part(name, args, call_id))
+            if call_id is not None:
+                seen_ids.add(call_id)
+    return parts
+
+
+def find_langchain_model_provider(raw: Any) -> Optional[str]:
+    """Walk a LangChain envelope and return the first AIMessage's
+    ``kwargs.response_metadata.model_provider`` (or ``additional_kwargs``
+    fallback). Returns None when no AIMessage is present.
+    """
+    items = _unwrap_langchain_envelope(raw)
+    if not items:
+        return None
+    for item in items:
+        if not _is_langchain_message_serializable(item):
+            continue
+        id_arr = item["id"]
+        lc_type = str(id_arr[-1])
+        if lc_type not in ("AIMessage", "AIMessageChunk"):
+            continue
+        kwargs = item.get("kwargs") if isinstance(item.get("kwargs"), dict) else {}
+        rm = kwargs.get("response_metadata")
+        if isinstance(rm, dict):
+            mp = rm.get("model_provider")
+            if isinstance(mp, str) and mp:
+                return mp
+        ak = kwargs.get("additional_kwargs")
+        if isinstance(ak, dict):
+            mp = ak.get("model_provider")
+            if isinstance(mp, str) and mp:
+                return mp
+    return None
 
 
 # ── Span-event canonicalization ────────────────────────────────────────────

@@ -179,13 +179,16 @@ def normalize_messages(span_attrs: dict) -> Optional[dict]:
     if input_msgs is None:
         args = span_attrs.get("ai.toolCall.args")
         tool_name = span_attrs.get("ai.toolCall.name")
+        tool_call_id = span_attrs.get("ai.toolCall.id")
+        if not isinstance(tool_call_id, str):
+            tool_call_id = None
         if args is not None and isinstance(tool_name, str):
             parsed_args = safe_json_parse(args) if isinstance(args, str) else args
             if parsed_args is None and isinstance(args, str):
                 parsed_args = args
             input_msgs = [{
                 "role": "assistant",
-                "parts": [tool_call_part(tool_name, parsed_args, None)],
+                "parts": [tool_call_part(tool_name, parsed_args, tool_call_id)],
             }]
 
     # ── Output side ──────────────────────────────────────────────────────
@@ -207,9 +210,12 @@ def normalize_messages(span_attrs: dict) -> Optional[dict]:
     if output_msgs is None:
         result = span_attrs.get("ai.toolCall.result")
         if result is not None:
+            tool_call_id = span_attrs.get("ai.toolCall.id")
+            if not isinstance(tool_call_id, str):
+                tool_call_id = None
             output_msgs = [{
                 "role": "tool",
-                "parts": [tool_call_response_part(result, None)],
+                "parts": [tool_call_response_part(result, tool_call_id)],
             }]
 
     if input_msgs is None and output_msgs is None:
@@ -225,7 +231,10 @@ def _parse_vercel_tool_calls(raw: Any) -> list:
     for tc in parsed:
         if not isinstance(tc, dict):
             continue
-        # Vercel uses {toolCallId, toolName, args} (camelCase, custom keys).
+        # Vercel uses {toolCallId, toolName, input} in ai.response.toolCalls
+        # (camelCase, with `input` rather than `args`/`arguments`). Older
+        # shapes and other emitters may use `args` or `arguments`; fall
+        # through.
         name = tc.get("toolName") if isinstance(tc.get("toolName"), str) else tc.get("name")
         if not isinstance(name, str):
             continue
@@ -233,9 +242,12 @@ def _parse_vercel_tool_calls(raw: Any) -> list:
             tc.get("toolCallId") if isinstance(tc.get("toolCallId"), str)
             else (tc.get("id") if isinstance(tc.get("id"), str) else None)
         )
-        # Match TS `obj.args ?? obj.arguments`: only fall through when
-        # tc.args is None, not when key present with falsy value.
-        args = tc.get("args")
+        # Match TS `obj.input ?? obj.args ?? obj.arguments`: only fall
+        # through when the key is missing/None, not when key present with
+        # falsy value.
+        args = tc.get("input")
+        if args is None:
+            args = tc.get("args")
         if args is None:
             args = tc.get("arguments")
         parsed_args = safe_json_parse(args) if isinstance(args, str) else args

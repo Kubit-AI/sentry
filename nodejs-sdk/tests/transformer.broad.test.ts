@@ -841,6 +841,192 @@ describe("OpenInference retrieval documents", () => {
   });
 });
 
+// LangChain (JS via `@arizeai/openinference-instrumentation-langchain`,
+// Python via `openinference.instrumentation.langchain`) lands on the
+// OpenInference adapter via Serializable envelopes inside `input.value` /
+// `output.value`. These tests exercise the integration end-to-end.
+describe("OpenInference (LangChain)", () => {
+  const lcMsg = (type: string, kwargs: Record<string, unknown>) => ({
+    lc: 1,
+    type: "constructor",
+    id: ["langchain_core", "messages", type],
+    kwargs,
+  });
+
+  it("TOOL span: tool.name + raw-args input + ToolMessage envelope output", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@arizeai/openinference-instrumentation-langchain",
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "add",
+              "input.value": JSON.stringify({ a: 47, b: 38 }),
+              "output.value": JSON.stringify(
+                lcMsg("ToolMessage", {
+                  content: "85",
+                  tool_call_id: "toolu_xyz",
+                  name: "add",
+                }),
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.tool_name).toBe("add");
+    expect(obs.input_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "add", arguments: { a: 47, b: 38 } }],
+      },
+    ]);
+    expect(obs.output_messages).toEqual([
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "85", id: "toolu_xyz" }],
+        name: "add",
+      },
+    ]);
+  });
+
+  it("TOOL span: {output: <ToolMessage>} wrapper on output.value", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "add",
+              "input.value": JSON.stringify({ a: 1 }),
+              "output.value": JSON.stringify({
+                output: lcMsg("ToolMessage", {
+                  content: "result",
+                  tool_call_id: "tc_1",
+                }),
+              }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.output_messages).toEqual([
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "result", id: "tc_1" }],
+      },
+    ]);
+  });
+
+  it("TOOL span: non-envelope JSON output.value falls back to raw value", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "add",
+              "input.value": JSON.stringify({ a: 1 }),
+              "output.value": "85",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "add", arguments: { a: 1 } }],
+      },
+    ]);
+    // Raw scalar "85" survives the JSON parse round-trip (becomes 85).
+    expect(obs.output_messages).toEqual([
+      { role: "tool", parts: [{ type: "tool_call_response", response: 85 }] },
+    ]);
+  });
+
+  it("LangChain output.value blob wins over indexed messages (precedence flip)", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "LLM",
+              "llm.output_messages.0.message.role": "assistant",
+              // Indexed projection has no slot for tool_use parts
+              "output.value": JSON.stringify(
+                lcMsg("AIMessage", {
+                  content: [{ type: "tool_use", id: "tu_1", name: "add", input: { a: 1 } }],
+                }),
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "add", id: "tu_1", arguments: { a: 1 } }],
+      },
+    ]);
+  });
+
+  it("provider resolves from AIMessage envelope's response_metadata.model_provider", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "LLM",
+              "llm.model_name": "claude-sonnet-4-5",
+              "output.value": JSON.stringify(
+                lcMsg("AIMessage", {
+                  content: "hi",
+                  response_metadata: { model_provider: "anthropic" },
+                }),
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provider).toBe("anthropic");
+  });
+
+  it("tool_definitions aggregated from indexed llm.tools.<n>.tool.json_schema", () => {
+    const schema0 = { type: "function", function: { name: "add", parameters: {} } };
+    const schema1 = { type: "function", function: { name: "sub", parameters: {} } };
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "LLM",
+              "llm.tools.0.tool.json_schema": JSON.stringify(schema0),
+              "llm.tools.1.tool.json_schema": JSON.stringify(schema1),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.tool_definitions).toEqual([schema0, schema1]);
+  });
+});
+
 describe("Braintrust indexed and metadata", () => {
   it("reconstructs indexed input/output messages", () => {
     const [obs] = observations(

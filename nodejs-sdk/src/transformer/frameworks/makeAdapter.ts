@@ -50,5 +50,6 @@ export function makeAdapter(overrides: AdapterOverrides): FrameworkAdapter {
     unpackMessages: overrides.unpackMessages,
     normalizeMessages: overrides.normalizeMessages,
     enrichMetadata: overrides.enrichMetadata,
+    aggregateToolDefinitions: overrides.aggregateToolDefinitions,
   };
 }

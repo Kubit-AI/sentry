@@ -230,6 +230,19 @@ function openAIContentPartToCanonical(raw: unknown): Part | null {
   const obj = raw as Record<string, unknown>;
   const type = obj.type;
   if (type === "text" && typeof obj.text === "string") return textPart(obj.text);
+  // Vercel AI SDK uses kebab-case content parts inside ai.prompt.messages
+  // for tool invocations and results. Map them to canonical snake_case parts
+  // so consumers don't have to know about the Vercel-specific shape.
+  if (type === "tool-call" && typeof obj.toolName === "string") {
+    const id = typeof obj.toolCallId === "string" ? obj.toolCallId : null;
+    const rawArgs = obj.input ?? obj.args ?? obj.arguments;
+    const args = typeof rawArgs === "string" ? safeJsonParse(rawArgs) ?? rawArgs : rawArgs;
+    return toolCallPart(obj.toolName, args, id);
+  }
+  if (type === "tool-result") {
+    const id = typeof obj.toolCallId === "string" ? obj.toolCallId : null;
+    return toolCallResponsePart(unwrapVercelToolResult(obj.output), id);
+  }
   if (type === "image_url") {
     const url =
       typeof obj.image_url === "string"
@@ -261,6 +274,27 @@ function parseImageUrl(url: string): Part {
   const dataMatch = /^data:([^;]+);base64,(.*)$/i.exec(url);
   if (dataMatch) return blobPart("image", dataMatch[2], dataMatch[1]);
   return uriPart("image", url);
+}
+
+/**
+ * Unwrap Vercel AI SDK's tool-result `output` envelope, which uses a
+ * discriminated `{type, value}` shape (e.g. `{type: "json", value: 85}`,
+ * `{type: "text", value: "..."}`, `{type: "error-text", value: "..."}`).
+ * Returns the inner value for the common `text`/`json`/`error-text`/
+ * `error-json` variants and passes the envelope through unchanged for any
+ * other shape so nothing is lost.
+ */
+function unwrapVercelToolResult(output: unknown): unknown {
+  if (!output || typeof output !== "object") return output;
+  const obj = output as Record<string, unknown>;
+  const t = obj.type;
+  if (
+    (t === "text" || t === "json" || t === "error-text" || t === "error-json") &&
+    "value" in obj
+  ) {
+    return obj.value;
+  }
+  return output;
 }
 
 // ── Pydantic AI envelope translator ────────────────────────────────────────
@@ -368,6 +402,233 @@ function pydanticAIResponseToMessage(parts: PydanticAIPart[]): Message | null {
   }
   if (canonical.length === 0) return null;
   return { role: "assistant", parts: canonical };
+}
+
+// ── LangChain Serializable envelope translator ─────────────────────────────
+//
+// LangChain (JS via `@arizeai/openinference-instrumentation-langchain`,
+// Python via `openinference.instrumentation.langchain`) emits message
+// envelopes inside `input.value` / `output.value` blobs as LangChain
+// `Serializable` objects:
+//
+//   {lc:1, type:"constructor",
+//    id:["langchain_core","messages","HumanMessage"|"AIMessage"|...],
+//    kwargs:{content, tool_calls?, tool_call_id?, name?, ...}}
+//
+// Wrappers vary: `{messages:[...]}` (most common), bare array, single
+// Serializable, `{output: <ToolMessage>}` (LangGraph TOOL span output
+// convention), `{input: ...}` (some chain nodes). Callers should treat a
+// `null` return as "not LangChain shape, fall through."
+
+type LangchainSerializable = {
+  lc?: unknown;
+  type?: unknown;
+  id?: unknown;
+  kwargs?: Record<string, unknown>;
+};
+
+function isLangchainMessageSerializable(v: unknown): v is LangchainSerializable {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  if (o.lc !== 1) return false;
+  if (!Array.isArray(o.id) || o.id.length < 2) return false;
+  return o.id[o.id.length - 2] === "messages";
+}
+
+function unwrapLangchainEnvelope(value: unknown): unknown[] | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const parsed = safeJsonParse(value);
+    if (parsed === null) return null;
+    return unwrapLangchainEnvelope(parsed);
+  }
+  if (Array.isArray(value)) {
+    return value.some(isLangchainMessageSerializable) ? value : null;
+  }
+  if (typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (Array.isArray(obj.messages)) return obj.messages;
+  if (obj.output !== undefined) {
+    if (Array.isArray(obj.output) && obj.output.some(isLangchainMessageSerializable)) {
+      return obj.output;
+    }
+    if (isLangchainMessageSerializable(obj.output)) return [obj.output];
+  }
+  if (obj.input !== undefined) return unwrapLangchainEnvelope(obj.input);
+  if (isLangchainMessageSerializable(obj)) return [obj];
+  return null;
+}
+
+export function langchainEnvelopeToCanonical(raw: unknown): Message[] | null {
+  const items = unwrapLangchainEnvelope(raw);
+  if (!items || items.length === 0) return null;
+  const out: Message[] = [];
+  for (const item of items) {
+    const msg = langchainSerializableToMessage(item);
+    if (msg) out.push(msg);
+  }
+  return out.length > 0 ? out : null;
+}
+
+function langchainSerializableToMessage(item: unknown): Message | null {
+  if (!isLangchainMessageSerializable(item)) {
+    // Be lenient: if the item carries a `role` we can still translate via the
+    // OpenAI-shape coercer (covers `{messages:[{role,content}]}` mixed with
+    // Serializables, which the empirical __start__ envelope produces).
+    if (item && typeof item === "object") {
+      const obj = item as Record<string, unknown>;
+      if (typeof obj.role === "string") return openAIMessageToCanonical(obj);
+    }
+    return null;
+  }
+  const idArr = item.id as unknown[];
+  const lcType = String(idArr[idArr.length - 1]);
+  const kwargs = (item.kwargs && typeof item.kwargs === "object")
+    ? (item.kwargs as Record<string, unknown>)
+    : {};
+  const content = kwargs.content;
+
+  switch (lcType) {
+    case "HumanMessage":
+      return langchainTextOnlyMessage("user", content);
+    case "SystemMessage":
+      return langchainTextOnlyMessage("system", content);
+    case "AIMessage":
+    case "AIMessageChunk": {
+      const parts = aiMessageContentAndToolCallsToParts(content, kwargs.tool_calls);
+      if (parts.length === 0) return null;
+      return { role: "assistant", parts };
+    }
+    case "ToolMessage": {
+      const callId = typeof kwargs.tool_call_id === "string"
+        ? (kwargs.tool_call_id as string)
+        : null;
+      const msg: Message = {
+        role: "tool",
+        parts: [toolCallResponsePart(content ?? null, callId)],
+      };
+      if (typeof kwargs.name === "string") msg.name = kwargs.name as string;
+      return msg;
+    }
+    case "FunctionMessage": {
+      const msg: Message = {
+        role: "tool",
+        parts: [toolCallResponsePart(content ?? null, null)],
+      };
+      if (typeof kwargs.name === "string") msg.name = kwargs.name as string;
+      return msg;
+    }
+    case "ChatMessage": {
+      const role = (typeof kwargs.role === "string" ? kwargs.role : "user") as Role;
+      return langchainTextOnlyMessage(role, content);
+    }
+    default:
+      return null;
+  }
+}
+
+function langchainTextOnlyMessage(role: Role, content: unknown): Message | null {
+  const parts = langchainContentToParts(content);
+  if (parts.length === 0) return null;
+  return { role, parts };
+}
+
+function langchainContentToParts(content: unknown): Part[] {
+  if (content === null || content === undefined) return [];
+  if (typeof content === "string") {
+    return content.length > 0 ? [textPart(content)] : [];
+  }
+  if (Array.isArray(content)) {
+    const out: Part[] = [];
+    for (const item of content) {
+      if (typeof item === "string") {
+        if (item.length > 0) out.push(textPart(item));
+        continue;
+      }
+      if (!item || typeof item !== "object") continue;
+      const obj = item as Record<string, unknown>;
+      const t = obj.type;
+      if (t === "text" && typeof obj.text === "string") {
+        if ((obj.text as string).length > 0) out.push(textPart(obj.text as string));
+        continue;
+      }
+      // Anthropic-shape inline tool call carried inside the content array.
+      if (t === "tool_use" && typeof obj.name === "string") {
+        const id = typeof obj.id === "string" ? (obj.id as string) : null;
+        out.push(toolCallPart(obj.name as string, obj.input, id));
+        continue;
+      }
+      const oai = openAIContentPartToCanonical(item);
+      if (oai) {
+        out.push(oai);
+        continue;
+      }
+      if (typeof t === "string") out.push(genericPart(t, obj));
+    }
+    return out;
+  }
+  const str = stringifyForText(content);
+  return str.length > 0 ? [textPart(str)] : [];
+}
+
+function aiMessageContentAndToolCallsToParts(
+  content: unknown,
+  toolCalls: unknown,
+): Part[] {
+  const parts = langchainContentToParts(content);
+  const seenIds = new Set<string>();
+  for (const p of parts) {
+    if (p.type === "tool_call") {
+      const id = (p as ToolCallRequestPart).id;
+      if (typeof id === "string") seenIds.add(id);
+    }
+  }
+  if (Array.isArray(toolCalls)) {
+    for (const tc of toolCalls) {
+      if (!tc || typeof tc !== "object") continue;
+      const obj = tc as Record<string, unknown>;
+      const name = typeof obj.name === "string" ? (obj.name as string) : null;
+      if (!name) continue;
+      const id = typeof obj.id === "string" ? (obj.id as string) : null;
+      if (id !== null && seenIds.has(id)) continue;
+      const args = obj.args ?? obj.arguments;
+      parts.push(toolCallPart(name, args, id));
+      if (id !== null) seenIds.add(id);
+    }
+  }
+  return parts;
+}
+
+/**
+ * Walk a LangChain envelope (string or already-parsed) for the first
+ * AIMessage Serializable and return its `kwargs.response_metadata.model_provider`
+ * (or `kwargs.additional_kwargs.model_provider`). Returns null when no
+ * AIMessage is present or the field is missing — used by the OpenInference
+ * adapter's `resolveProvider` hook.
+ */
+export function findLangchainModelProvider(raw: unknown): string | null {
+  const items = unwrapLangchainEnvelope(raw);
+  if (!items) return null;
+  for (const item of items) {
+    if (!isLangchainMessageSerializable(item)) continue;
+    const idArr = item.id as unknown[];
+    const lcType = String(idArr[idArr.length - 1]);
+    if (lcType !== "AIMessage" && lcType !== "AIMessageChunk") continue;
+    const kwargs = (item.kwargs && typeof item.kwargs === "object")
+      ? (item.kwargs as Record<string, unknown>)
+      : {};
+    const rm = kwargs.response_metadata;
+    if (rm && typeof rm === "object") {
+      const mp = (rm as Record<string, unknown>).model_provider;
+      if (typeof mp === "string" && mp.length > 0) return mp;
+    }
+    const ak = kwargs.additional_kwargs;
+    if (ak && typeof ak === "object") {
+      const mp = (ak as Record<string, unknown>).model_provider;
+      if (typeof mp === "string" && mp.length > 0) return mp;
+    }
+  }
+  return null;
 }
 
 // ── Span-event canonicalization ────────────────────────────────────────────

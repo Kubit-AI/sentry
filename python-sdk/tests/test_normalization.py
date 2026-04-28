@@ -155,6 +155,158 @@ class TestOpeninferenceNormalizer:
         }]
 
 
+# ── openinference (LangChain envelope) ────────────────────────────────────
+
+
+def _lc_msg(type_: str, kwargs: dict) -> dict:
+    """LangChain Serializable shape:
+    {"lc":1, "type":"constructor", "id":["langchain_core","messages",<MsgType>], "kwargs":{...}}"""
+    return {
+        "lc": 1,
+        "type": "constructor",
+        "id": ["langchain_core", "messages", type_],
+        "kwargs": kwargs,
+    }
+
+
+class TestOpeninferenceLangchainEnvelope:
+    def test_messages_wrapper_with_human_message(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "input.value": json.dumps({
+                "messages": [_lc_msg("HumanMessage", {"content": "What is 2+2?"})],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "What is 2+2?"}]},
+        ]
+
+    def test_ai_message_content_array_tool_use(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "output.value": json.dumps(
+                _lc_msg("AIMessage", {
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "add", "input": {"a": 1, "b": 2}},
+                    ],
+                }),
+            ),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] == [{
+            "role": "assistant",
+            "parts": [{"type": "tool_call", "name": "add", "id": "toolu_1", "arguments": {"a": 1, "b": 2}}],
+        }]
+
+    def test_ai_message_kwargs_tool_calls_only(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "output.value": json.dumps(
+                _lc_msg("AIMessage", {
+                    "content": "calling add",
+                    "tool_calls": [{"name": "add", "args": {"a": 1, "b": 2}, "id": "toolu_2", "type": "tool_call"}],
+                }),
+            ),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] == [{
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "content": "calling add"},
+                {"type": "tool_call", "name": "add", "id": "toolu_2", "arguments": {"a": 1, "b": 2}},
+            ],
+        }]
+
+    def test_ai_message_dedup_content_and_kwargs_tool_calls(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "output.value": json.dumps(
+                _lc_msg("AIMessage", {
+                    "content": [{"type": "tool_use", "id": "toolu_3", "name": "add", "input": {"a": 1}}],
+                    "tool_calls": [{"name": "add", "args": {"a": 1}, "id": "toolu_3", "type": "tool_call"}],
+                }),
+            ),
+        })
+        r = _obs(_transform(span))
+        parts = r["output_messages"][0]["parts"]
+        assert parts == [
+            {"type": "tool_call", "name": "add", "id": "toolu_3", "arguments": {"a": 1}},
+        ]
+
+    def test_tool_message_with_tool_call_id(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "input.value": json.dumps({
+                "messages": [_lc_msg("ToolMessage", {"content": "85", "tool_call_id": "toolu_4", "name": "add"})],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [{
+            "role": "tool",
+            "parts": [{"type": "tool_call_response", "response": "85", "id": "toolu_4"}],
+            "name": "add",
+        }]
+
+    def test_system_message(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "input.value": json.dumps({
+                "messages": [_lc_msg("SystemMessage", {"content": "Be terse."})],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "system", "parts": [{"type": "text", "content": "Be terse."}]},
+        ]
+
+    def test_full_transcript_human_ai_tool_ai(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "input.value": json.dumps({
+                "messages": [
+                    _lc_msg("HumanMessage", {"content": "What is 47 + 38?"}),
+                    _lc_msg("AIMessage", {
+                        "content": [{"type": "tool_use", "id": "toolu_x", "name": "add", "input": {"a": 47, "b": 38}}],
+                        "tool_calls": [{"name": "add", "args": {"a": 47, "b": 38}, "id": "toolu_x", "type": "tool_call"}],
+                    }),
+                    _lc_msg("ToolMessage", {"content": "85", "tool_call_id": "toolu_x", "name": "add"}),
+                    _lc_msg("AIMessage", {"content": "47 + 38 = 85"}),
+                ],
+            }),
+        })
+        r = _obs(_transform(span))
+        msgs = r["input_messages"]
+        assert len(msgs) == 4
+        assert msgs[0]["role"] == "user"
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["parts"] == [
+            {"type": "tool_call", "name": "add", "id": "toolu_x", "arguments": {"a": 47, "b": 38}},
+        ]
+        assert msgs[2]["role"] == "tool"
+        assert msgs[2]["parts"][0]["type"] == "tool_call_response"
+        assert msgs[2]["parts"][0]["response"] == "85"
+        assert msgs[2]["parts"][0]["id"] == "toolu_x"
+        assert msgs[3] == {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "47 + 38 = 85"}],
+        }
+
+    def test_bare_array_serializables(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "llm",
+            "input.value": json.dumps([
+                _lc_msg("HumanMessage", {"content": "hi"}),
+                _lc_msg("AIMessage", {"content": "hello"}),
+            ]),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "hi"}]},
+            {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]},
+        ]
+
+
 # ── traceloop ──────────────────────────────────────────────────────────────
 
 

@@ -163,4 +163,12 @@ export interface FrameworkAdapter {
    */
   normalizeMessages?(attrs: Record<string, unknown>): CanonicalMessages | null;
   enrichMetadata?(attrs: Record<string, unknown>, metadata: Record<string, unknown>): void;
+  /**
+   * Aggregate `tool_definitions` from non-blob sources (e.g. indexed
+   * `llm.tools.<n>.tool.json_schema` flattening). Adapters that emit
+   * a single attribute should leave this unset and rely on
+   * `TOOL_DEFINITIONS_ATTRS` instead. Core falls back to that single-attribute
+   * path when every adapter returns `null` here.
+   */
+  aggregateToolDefinitions?(attrs: Record<string, unknown>): unknown[] | null;
 }

@@ -351,7 +351,8 @@ export function transformSpans(
         prompt_id: firstAttr(spanAttrs, PROMPT_ID_ATTRS) ?? null,
         prompt_name: firstAttr(spanAttrs, PROMPT_NAME_ATTRS) ?? null,
         prompt_version: safeInt(firstAttr(spanAttrs, PROMPT_VERSION_ATTRS)),
-        tool_definitions: firstAttr(spanAttrs, TOOL_DEFINITIONS_ATTRS) ?? null,
+        tool_definitions: aggregateToolDefinitions(spanAttrs)
+                          ?? firstAttr(spanAttrs, TOOL_DEFINITIONS_ATTRS) ?? null,
         tool_calls: firstAttr(spanAttrs, TOOL_CALLS_ATTRS) ?? null,
         tool_call_names: firstAttr(spanAttrs, TOOL_CALL_NAMES_ATTRS) ?? null,
         tags,
@@ -423,6 +424,15 @@ function resolveProvider(spanAttrs: Record<string, unknown>): string | null {
     const val = spanAttrs[attr];
     if (val === undefined || val === null) continue;
     return typeof val === "string" ? val : String(val);
+  }
+  return null;
+}
+
+function aggregateToolDefinitions(spanAttrs: Record<string, unknown>): unknown[] | null {
+  for (const fw of FRAMEWORKS) {
+    if (!fw.aggregateToolDefinitions) continue;
+    const result = fw.aggregateToolDefinitions(spanAttrs);
+    if (result && result.length > 0) return result;
   }
   return null;
 }
