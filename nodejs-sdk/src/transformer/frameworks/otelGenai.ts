@@ -11,6 +11,17 @@
  */
 
 import { cleanDiscriminator } from "../helpers";
+import {
+  coerceToMessages,
+  safeJsonParse,
+  textMessage,
+  toolCallPart,
+} from "../messages";
+import type {
+  CanonicalMessages,
+  Message,
+  ToolCallRequestPart,
+} from "./types";
 import { makeAdapter } from "./makeAdapter";
 
 const FLAT_PARAM_ATTRS = [
@@ -76,7 +87,7 @@ export const adapter = makeAdapter({
     const op = cleanDiscriminator(attrs[OPERATION_NAME_ATTR]);
     if (!op) return null;
     if (GENERATION_OPS.has(op)) return "GENERATION";
-    if (op === "embedding") return "EMBEDDING";
+    if (op === "embedding" || op === "embeddings") return "EMBEDDINGS";
     if (op === "execute_tool") return "TOOL";
     return op.toUpperCase();
   },
@@ -88,4 +99,84 @@ export const adapter = makeAdapter({
       if (!(key in merged)) merged[key] = val;
     }
   },
+  normalizeMessages(attrs): CanonicalMessages | null {
+    const input = canonicalizeSide(
+      attrs["gen_ai.input.messages"],
+      attrs["gen_ai.prompt"] ?? attrs["gen_ai.content.prompt"],
+      "user",
+    );
+    let output = canonicalizeSide(
+      attrs["gen_ai.output.messages"],
+      attrs["gen_ai.completion"] ?? attrs["gen_ai.content.completion"],
+      "assistant",
+    );
+    output = mergeToolCallsIntoOutput(output, attrs["gen_ai.tool.calls"]);
+    if (input === null && output === null) return null;
+    return { input, output };
+  },
 });
+
+function canonicalizeSide(
+  messagesAttr: unknown,
+  textAttr: unknown,
+  textRole: "user" | "assistant",
+): Message[] | null {
+  if (messagesAttr !== undefined && messagesAttr !== null) {
+    const coerced = coerceToMessages(messagesAttr);
+    if (coerced && coerced.length > 0) return coerced;
+  }
+  if (typeof textAttr === "string" && textAttr.length > 0) {
+    return [textMessage(textRole, textAttr)];
+  }
+  return null;
+}
+
+/**
+ * If `gen_ai.tool.calls` is present (JSON string of `[{id, name, arguments}]`
+ * or OpenAI-shape `[{id, type, function:{name, arguments}}]`), append them as
+ * `ToolCallRequestPart`s onto the trailing assistant message. Synthesizes an
+ * assistant message if none exists yet.
+ */
+function mergeToolCallsIntoOutput(
+  output: Message[] | null,
+  rawToolCalls: unknown,
+): Message[] | null {
+  if (rawToolCalls === undefined || rawToolCalls === null) return output;
+  const parsed =
+    typeof rawToolCalls === "string"
+      ? safeJsonParse(rawToolCalls)
+      : rawToolCalls;
+  if (!Array.isArray(parsed) || parsed.length === 0) return output;
+
+  const parts: ToolCallRequestPart[] = [];
+  for (const tc of parsed) {
+    if (!tc || typeof tc !== "object") continue;
+    const obj = tc as Record<string, unknown>;
+    const fn = obj.function as Record<string, unknown> | undefined;
+    const name =
+      (typeof obj.name === "string" ? obj.name : undefined) ??
+      (typeof fn?.name === "string" ? (fn.name as string) : undefined);
+    if (!name) continue;
+    const rawArgs = obj.arguments ?? fn?.arguments;
+    const args =
+      typeof rawArgs === "string" ? safeJsonParse(rawArgs) ?? rawArgs : rawArgs;
+    parts.push(
+      toolCallPart(
+        name,
+        args,
+        typeof obj.id === "string" ? obj.id : null,
+      ),
+    );
+  }
+  if (parts.length === 0) return output;
+
+  if (output && output.length > 0) {
+    const last = output[output.length - 1];
+    if (last.role === "assistant") {
+      last.parts = [...last.parts, ...parts];
+      return output;
+    }
+  }
+  const synthesized: Message = { role: "assistant", parts };
+  return output ? [...output, synthesized] : [synthesized];
+}

@@ -14,6 +14,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..helpers import clean_discriminator
+from ..messages import (
+    coerce_to_messages,
+    safe_json_parse,
+    text_message,
+    tool_call_part,
+)
 
 NAME = "otel_genai"
 
@@ -127,8 +133,8 @@ def resolve_observation_type(span_attrs: dict) -> str | None:
         return None
     if op in _GENERATION_OPS:
         return "GENERATION"
-    if op == "embedding":
-        return "EMBEDDING"
+    if op in ("embedding", "embeddings"):
+        return "EMBEDDINGS"
     if op == "execute_tool":
         return "TOOL"
     return op.upper()
@@ -147,3 +153,86 @@ def build_params(span_attrs: dict, merged: dict[str, Any]) -> None:
         key = attr[len("gen_ai.request."):]
         if key not in merged:
             merged[key] = val
+
+
+def normalize_messages(span_attrs: dict) -> dict | None:
+    prompt = span_attrs.get("gen_ai.prompt")
+    if prompt is None:
+        prompt = span_attrs.get("gen_ai.content.prompt")
+    completion = span_attrs.get("gen_ai.completion")
+    if completion is None:
+        completion = span_attrs.get("gen_ai.content.completion")
+    input_msgs = _canonicalize_side(
+        span_attrs.get("gen_ai.input.messages"),
+        prompt,
+        "user",
+    )
+    output_msgs = _canonicalize_side(
+        span_attrs.get("gen_ai.output.messages"),
+        completion,
+        "assistant",
+    )
+    output_msgs = _merge_tool_calls_into_output(
+        output_msgs, span_attrs.get("gen_ai.tool.calls")
+    )
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _canonicalize_side(messages_attr: Any, text_attr: Any, text_role: str) -> list | None:
+    if messages_attr is not None:
+        coerced = coerce_to_messages(messages_attr)
+        if coerced:
+            return coerced
+    if isinstance(text_attr, str) and text_attr:
+        return [text_message(text_role, text_attr)]
+    return None
+
+
+def _merge_tool_calls_into_output(output: list | None, raw_tool_calls: Any) -> list | None:
+    """If ``gen_ai.tool.calls`` is present, append ``ToolCallRequestPart``s
+    onto the trailing assistant message. Synthesizes an assistant message if
+    none exists yet.
+    """
+    if raw_tool_calls is None:
+        return output
+    parsed = safe_json_parse(raw_tool_calls) if isinstance(raw_tool_calls, str) else raw_tool_calls
+    if not isinstance(parsed, list) or not parsed:
+        return output
+
+    parts: list = []
+    for tc in parsed:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+        # Match TS `obj.name ?? fn?.name`: prefer string `name` on tc; only
+        # fall through to fn when tc.name is None/missing (not when "").
+        name = tc.get("name") if isinstance(tc.get("name"), str) else None
+        if name is None and fn is not None:
+            name = fn.get("name") if isinstance(fn.get("name"), str) else None
+        if not isinstance(name, str):
+            continue
+        # Match TS `obj.arguments ?? fn?.arguments`: only fall through when
+        # tc.arguments is None (key absent or value None), not when key is
+        # present with a non-None falsy value.
+        raw_args = tc.get("arguments")
+        if raw_args is None and fn is not None:
+            raw_args = fn.get("arguments")
+        args = safe_json_parse(raw_args) if isinstance(raw_args, str) else raw_args
+        if args is None and isinstance(raw_args, str):
+            args = raw_args
+        call_id = tc.get("id") if isinstance(tc.get("id"), str) else None
+        parts.append(tool_call_part(name, args, call_id))
+    if not parts:
+        return output
+
+    if output:
+        last = output[-1]
+        if last.get("role") == "assistant":
+            last["parts"] = list(last.get("parts", [])) + parts
+            return output
+    synthesized = {"role": "assistant", "parts": parts}
+    if output:
+        return list(output) + [synthesized]
+    return [synthesized]

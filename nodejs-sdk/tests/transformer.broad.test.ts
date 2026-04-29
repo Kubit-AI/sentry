@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
-import { transformSpans } from "./transformer";
+import { transformSpans } from "../src/transformer";
 
 type SpanEventInput = {
   name: string;
@@ -111,8 +111,8 @@ describe("OpenAI Agents v2 schema", () => {
     const [obs] = observations(
       transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"),
     );
-    expect(JSON.parse(obs.input as string)[0].content).toBe("hello");
-    expect(JSON.parse(obs.output as string)[0].content).toBe("hi");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("hello");
+    expect(JSON.parse(obs.output_messages_raw as string)[0].content).toBe("hi");
   });
 
   it("packs model_parameters from flat gen_ai.request.* keys", () => {
@@ -186,6 +186,19 @@ describe("Braintrust schema", () => {
       transformSpans([makeSpan({ attrs: a })], "wid", "claim"),
     );
     expect(obs.type).toBe("GENERATION");
+  });
+
+  it("accepts the namespaced braintrust.span_attributes.type form", () => {
+    // Some emitters namespace the discriminator under `braintrust.`; both
+    // forms must resolve to the same observation type.
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ attrs: { "braintrust.span_attributes.type": "eval" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EVAL");
   });
 });
 
@@ -267,8 +280,8 @@ describe("OpenInference schema", () => {
     const [obs] = observations(
       transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"),
     );
-    expect(obs.input).toBe("what's the weather");
-    expect(obs.output).toBe("sunny");
+    expect(obs.input_messages_raw).toBe("what's the weather");
+    expect(obs.output_messages_raw).toBe("sunny");
   });
 });
 
@@ -328,7 +341,7 @@ describe("LangSmith schema", () => {
     const [obs] = observations(
       transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"),
     );
-    expect(JSON.parse(obs.input as string)[0].content).toBe("q");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("q");
   });
 });
 
@@ -353,7 +366,7 @@ describe("Logfire 'latest' mode schema", () => {
     );
     expect(obs.tags).toEqual(["prod", "web"]);
     expect(obs.type).toBe("GENERATION");
-    expect(JSON.parse(obs.input as string)[0].content).toBe("x");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("x");
   });
 });
 
@@ -509,11 +522,11 @@ describe("Indexed message unpacking (disabled adapters)", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([
       { role: "system", content: "you are helpful" },
       { role: "user", content: "hi" },
     ]);
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "hello" },
     ]);
   });
@@ -537,8 +550,8 @@ describe("Indexed message unpacking (disabled adapters)", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([{ role: "user", content: "hey" }]);
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([{ role: "user", content: "hey" }]);
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "sup" },
     ]);
   });
@@ -561,7 +574,7 @@ describe("Indexed message unpacking (disabled adapters)", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)[0].content).toBe("flat");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("flat");
   });
 });
 
@@ -653,8 +666,8 @@ describe("Braintrust native payloads", () => {
         "claim",
       ),
     );
-    expect((JSON.parse(obs.input as string) as { messages: { role: string }[] }).messages[0].role).toBe("user");
-    expect((JSON.parse(obs.output as string) as { content: string }).content).toBe("ok");
+    expect((JSON.parse(obs.input_messages_raw as string) as { messages: { role: string }[] }).messages[0].role).toBe("user");
+    expect((JSON.parse(obs.output_messages_raw as string) as { content: string }).content).toBe("ok");
   });
 
   it("gen_ai.prompt_json / completion_json fallback", () => {
@@ -672,8 +685,8 @@ describe("Braintrust native payloads", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)[0].role).toBe("user");
-    expect(JSON.parse(obs.output as string)[0].role).toBe("assistant");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].role).toBe("user");
+    expect(JSON.parse(obs.output_messages_raw as string)[0].role).toBe("assistant");
   });
 
   it("braintrust.metrics.* promoted to usage_details", () => {
@@ -717,7 +730,7 @@ describe("OpenInference embedding", () => {
       ),
     );
     expect(obs.model).toBe("text-embedding-3-small");
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
   });
 });
 
@@ -729,7 +742,7 @@ describe("llm.request.type fallback", () => {
     expect(obs.type).toBe("GENERATION");
   });
 
-  it("embedding maps to EMBEDDING", () => {
+  it("embedding maps to EMBEDDINGS", () => {
     const [obs] = observations(
       transformSpans(
         [makeSpan({ attrs: { "llm.request.type": "embedding" } })],
@@ -737,7 +750,7 @@ describe("llm.request.type fallback", () => {
         "claim",
       ),
     );
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
   });
 
   it("rerank maps to WORKFLOW", () => {
@@ -786,8 +799,8 @@ describe("Traceloop entity payloads", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe(JSON.stringify({ query: "hello" }));
-    expect(obs.output).toBe(JSON.stringify({ answer: "hi" }));
+    expect(obs.input_messages_raw).toBe(JSON.stringify({ query: "hello" }));
+    expect(obs.output_messages_raw).toBe(JSON.stringify({ answer: "hi" }));
   });
 });
 
@@ -813,7 +826,7 @@ describe("OpenInference retrieval documents", () => {
       ),
     );
     expect(obs.type).toBe("RETRIEVER");
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { content: "Paris is the capital of France.", id: "doc-1", score: 0.97 },
       { content: "The Eiffel Tower is in Paris.", id: "doc-2", score: 0.91 },
     ]);
@@ -835,9 +848,255 @@ describe("OpenInference retrieval documents", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "from messages" },
     ]);
+  });
+
+  it("retrieval docs populate both legacy `output` and canonical `output_messages`", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "retriever",
+              "retrieval.documents.0.document.content": "Paris is the capital of France.",
+              "retrieval.documents.0.document.id": "doc-1",
+              "retrieval.documents.0.document.score": 0.97,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    // Legacy path (unpackMessages)
+    expect(obs.output_messages_raw).toBeTruthy();
+    expect(JSON.stringify(obs.output_messages_raw)).toContain("Paris is the capital of France.");
+    // Canonical path (normalizeMessages) — guard against `[]` regression
+    expect(Array.isArray(obs.output)).toBe(true);
+    expect((obs.output as unknown[]).length).toBeGreaterThan(0);
+    expect(JSON.stringify(obs.output)).toContain("Paris is the capital of France.");
+  });
+});
+
+// LangChain (JS via `@arizeai/openinference-instrumentation-langchain`,
+// Python via `openinference.instrumentation.langchain`) lands on the
+// OpenInference adapter via Serializable envelopes inside `input.value` /
+// `output.value`. These tests exercise the integration end-to-end.
+describe("OpenInference (LangChain)", () => {
+  const lcMsg = (type: string, kwargs: Record<string, unknown>) => ({
+    lc: 1,
+    type: "constructor",
+    id: ["langchain_core", "messages", type],
+    kwargs,
+  });
+
+  it("TOOL span: tool.name + raw-args input + ToolMessage envelope output", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@arizeai/openinference-instrumentation-langchain",
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "add",
+              "input.value": JSON.stringify({ a: 47, b: 38 }),
+              "output.value": JSON.stringify(
+                lcMsg("ToolMessage", {
+                  content: "85",
+                  tool_call_id: "toolu_xyz",
+                  name: "add",
+                }),
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.tool_name).toBe("add");
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "add", arguments: { a: 47, b: 38 } }],
+      },
+    ]);
+    expect(obs.output).toEqual([
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "85", id: "toolu_xyz" }],
+        name: "add",
+      },
+    ]);
+  });
+
+  it("TOOL span: {output: <ToolMessage>} wrapper on output.value", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "add",
+              "input.value": JSON.stringify({ a: 1 }),
+              "output.value": JSON.stringify({
+                output: lcMsg("ToolMessage", {
+                  content: "result",
+                  tool_call_id: "tc_1",
+                }),
+              }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.output).toEqual([
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "result", id: "tc_1" }],
+      },
+    ]);
+  });
+
+  it("TOOL span: non-envelope JSON output.value falls back to raw value", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "add",
+              "input.value": JSON.stringify({ a: 1 }),
+              "output.value": "85",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "add", arguments: { a: 1 } }],
+      },
+    ]);
+    // Raw scalar "85" survives the JSON parse round-trip (becomes 85).
+    expect(obs.output).toEqual([
+      { role: "tool", parts: [{ type: "tool_call_response", response: 85 }] },
+    ]);
+  });
+
+  it("TOOL span: empty tool.name does not synthesize a tool_call", () => {
+    // Guard against an instrumentation that emits `tool.name = ""`: the
+    // synthesizer must not produce a `tool_call` part with an empty name
+    // (which would corrupt downstream call/response linking). Mirrors the
+    // Python `if not isinstance(...) or not tool_name` short-circuit.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "",
+              "input.value": JSON.stringify({ a: 1 }),
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    // Synthesizer returns {input: null, output: null}; input falls through
+    // to other adapters. Whatever lands, it must not be a tool_call with
+    // name="".
+    for (const msg of obs.input ?? []) {
+      for (const part of msg.parts ?? []) {
+        expect(
+          (part as { type: string; name?: string }).type === "tool_call" &&
+            (part as { type: string; name?: string }).name === "",
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("LangChain output.value blob wins over indexed messages (precedence flip)", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "LLM",
+              "llm.output_messages.0.message.role": "assistant",
+              // Indexed projection has no slot for tool_use parts
+              "output.value": JSON.stringify(
+                lcMsg("AIMessage", {
+                  content: [{ type: "tool_use", id: "tu_1", name: "add", input: { a: 1 } }],
+                }),
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.output).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "add", id: "tu_1", arguments: { a: 1 } }],
+      },
+    ]);
+  });
+
+  it("provider resolves from AIMessage envelope's response_metadata.model_provider", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "LLM",
+              "llm.model_name": "claude-sonnet-4-5",
+              "output.value": JSON.stringify(
+                lcMsg("AIMessage", {
+                  content: "hi",
+                  response_metadata: { model_provider: "anthropic" },
+                }),
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provider).toBe("anthropic");
+  });
+
+  it("tool_definitions aggregated from indexed llm.tools.<n>.tool.json_schema", () => {
+    const schema0 = { type: "function", function: { name: "add", parameters: {} } };
+    const schema1 = { type: "function", function: { name: "sub", parameters: {} } };
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "LLM",
+              "llm.tools.0.tool.json_schema": JSON.stringify(schema0),
+              "llm.tools.1.tool.json_schema": JSON.stringify(schema1),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.tool_definitions).toEqual([schema0, schema1]);
   });
 });
 
@@ -861,11 +1120,11 @@ describe("Braintrust indexed and metadata", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([
       { role: "user", content: "what's the capital of France?" },
       { role: "assistant", content: "Paris." },
     ]);
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "Paris." },
     ]);
   });

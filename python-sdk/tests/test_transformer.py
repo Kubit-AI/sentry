@@ -159,8 +159,8 @@ class TestLangfuseV4SpanType:
         assert obs["model"] is None
         assert obs["usage_details"] == {}
         assert obs["cost_details"] == {}
-        assert obs["input"] == json.dumps({"x": 1})
-        assert obs["output"] == json.dumps({"y": 2})
+        assert obs["input_messages_raw"] == json.dumps({"x": 1})
+        assert obs["output_messages_raw"] == json.dumps({"y": 2})
 
     def test_type_tool_maps_to_tool(self):
         span = _mock_span(
@@ -182,6 +182,88 @@ class TestLangfuseV4SpanType:
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "AGENT"
+
+    # The Langfuse JS SDK emits ``langfuse.observation.type=span`` for the
+    # LangChain wrapper spans (LangGraph root, ``tools``, ``model_request``,
+    # ``RunnableLambda``, ``__start__``) where the Python SDK emits ``chain``.
+    # Fold the JS literal back to CHAIN when the integration metadata says
+    # we're inside a langchain run, so cross-SDK observation types stay
+    # aligned.
+    def test_type_span_folds_to_chain_when_ls_integration_is_langchain(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "span",
+                "langfuse.observation.metadata.ls_integration": "langchain_create_agent",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "CHAIN"
+
+    def test_type_span_without_langchain_integration_stays_span(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "span",
+                "langfuse.observation.metadata.ls_integration": "openai",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "SPAN"
+
+
+class TestLangfuseProviderModelAliases:
+    def test_populates_provider_from_metadata_ls_provider(self):
+        span = _mock_span(
+            attributes={"langfuse.observation.metadata.ls_provider": "anthropic"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provider"] == "anthropic"
+
+    def test_populates_provided_model_name_from_metadata_ls_model_name(self):
+        span = _mock_span(
+            attributes={"langfuse.observation.metadata.ls_model_name": "claude-sonnet-4-6"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provided_model_name"] == "claude-sonnet-4-6"
+
+    # Confirms that finding #7 (tool-span output stringified as ToolMessage
+    # Serializable JSON-blob) is closed by the langchain envelope routing
+    # already in place from the previous fix. ToolMessage Serializables in
+    # ``langfuse.observation.output`` should produce a clean
+    # ``tool_call_response`` part, lifting the ``tool_call_id`` linkage and
+    # the tool name onto the canonical message.
+    def test_normalizes_toolmessage_serializable_output_to_tool_call_response(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "tool",
+                "langfuse.observation.output": json.dumps({
+                    "lc": 1,
+                    "type": "constructor",
+                    "id": ["langchain_core", "messages", "ToolMessage"],
+                    "kwargs": {
+                        "status": "success",
+                        "content": "85",
+                        "tool_call_id": "toolu_0183unn5QaJzKbi2w9yqPNdq",
+                        "name": "add",
+                        "additional_kwargs": {},
+                        "response_metadata": {},
+                    },
+                }),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["output"] == [
+            {
+                "role": "tool",
+                "name": "add",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "toolu_0183unn5QaJzKbi2w9yqPNdq",
+                        "response": "85",
+                    },
+                ],
+            },
+        ]
 
 
 class TestJsonBlobRobustness:
@@ -297,18 +379,87 @@ class TestRootAndResourceMapping:
         assert obs["parent_observation_id"] is None
         assert obs["trace_name"] == "plan_trip"
 
-    def test_child_span_has_parent_observation_id(self):
+    def test_child_span_has_parent_observation_id_when_parent_in_batch(self):
+        parent = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xBBB,
+            attributes={"langfuse.observation.type": "span"},
+        )
         child = _mock_span(
             trace_id=0xAAA,
             span_id=0xCCC,
             parent_span_id=0xBBB,
             attributes={"langfuse.observation.type": "span"},
         )
-        records = transform_spans([child], "wid", "claim")
+        records = transform_spans([parent, child], "wid", "claim")
+        obs_by_id = {o["id"]: o for o in _observations(records)}
+        assert obs_by_id[format(0xCCC, "016x")]["parent_observation_id"] == format(
+            0xBBB, "016x"
+        )
+        # One trace record from the parent root, none synthesised for the child.
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+
+
+class TestOrphanAsRoot:
+    """A span whose parent is absent from the export batch is treated as a
+    trace root. This handles the common case where a server/HTTP parent span
+    was filtered out by ``is_default_export_span`` before the GenAI children
+    reached the exporter — without it, those children would carry a
+    ``parent_observation_id`` pointing at a span Kubit never sees.
+    """
+
+    def test_orphan_span_promoted_to_root(self):
+        span = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xCCC,
+            parent_span_id=0xBBB,
+            attributes={"langfuse.observation.type": "generation"},
+        )
+        records = transform_spans([span], "wid", "claim")
+        trace = _trace(records)
+        assert trace["id"] == format(0xAAA, "032x")
         [obs] = _observations(records)
-        assert obs["parent_observation_id"] == format(0xBBB, "016x")
-        # No trace record emitted for non-root spans.
-        assert not [r for r in records if r["entity_type"] == "trace"]
+        assert obs["parent_observation_id"] is None
+        assert obs["trace_name"] == "span"
+
+    def test_child_unchanged_when_parent_in_same_batch(self):
+        parent = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xBBB,
+            attributes={"langfuse.observation.type": "span"},
+        )
+        child = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xCCC,
+            parent_span_id=0xBBB,
+            attributes={"langfuse.observation.type": "generation"},
+        )
+        records = transform_spans([parent, child], "wid", "claim")
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+        obs = {o["id"]: o for o in _observations(records)}
+        assert obs[format(0xCCC, "016x")]["parent_observation_id"] == format(
+            0xBBB, "016x"
+        )
+
+    def test_multiple_orphans_same_trace_emit_one_trace(self):
+        spans = [
+            _mock_span(
+                trace_id=0xAAA,
+                span_id=0xCCC,
+                parent_span_id=0xBBB,
+                attributes={"langfuse.observation.type": "generation"},
+            ),
+            _mock_span(
+                trace_id=0xAAA,
+                span_id=0xDDD,
+                parent_span_id=0xBBB,
+                attributes={"langfuse.observation.type": "generation"},
+            ),
+        ]
+        records = transform_spans(spans, "wid", "claim")
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+        for obs in _observations(records):
+            assert obs["parent_observation_id"] is None
 
 
 class TestObservationTypePassThrough:
@@ -320,10 +471,19 @@ class TestObservationTypePassThrough:
     covered in ``tests/test_transformer_broad.py``.
     """
 
-    def test_gen_ai_operation_embedding_maps_to_embedding(self):
+    def test_gen_ai_operation_embedding_legacy_singular_maps_to_embeddings(self):
         span = _mock_span(attributes={"gen_ai.operation.name": "embedding"})
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["type"] == "EMBEDDING"
+        assert obs["type"] == "EMBEDDINGS"
+
+    def test_gen_ai_operation_embeddings_plural_maps_to_embeddings(self):
+        """OTel GenAI v2 canonical value is plural ``embeddings``; the
+        singular form is the older draft. Both must collapse to the
+        single canonical observation type ``EMBEDDINGS``.
+        """
+        span = _mock_span(attributes={"gen_ai.operation.name": "embeddings"})
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
 
     def test_gen_ai_operation_execute_tool_maps_to_tool(self):
         span = _mock_span(attributes={"gen_ai.operation.name": "execute_tool"})
@@ -410,7 +570,7 @@ class TestGenAiSpanEvents:
             ],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        inp = json.loads(obs["input"])
+        inp = json.loads(obs["input_messages_raw"])
         assert inp == [
             {"role": "system", "content": "be helpful"},
             {"role": "user", "content": "hello"},
@@ -427,7 +587,7 @@ class TestGenAiSpanEvents:
             ],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        out = json.loads(obs["output"])
+        out = json.loads(obs["output_messages_raw"])
         assert out == [{"index": 0, "finish_reason": "stop", "message": "hi"}]
 
     def test_attribute_input_beats_event_input(self):
@@ -437,7 +597,7 @@ class TestGenAiSpanEvents:
             events=[self._event("gen_ai.user.message", {"content": "event-form"})],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == "attr-form"
+        assert obs["input_messages_raw"] == "attr-form"
 
     def test_event_role_overrides_event_name_fallback(self):
         # Explicit role in event attrs wins over the name-derived default.
@@ -447,7 +607,7 @@ class TestGenAiSpanEvents:
             ],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"])[0]["role"] == "developer"
+        assert json.loads(obs["input_messages_raw"])[0]["role"] == "developer"
 
 
 class TestLangfuseTraceNameOverride:
@@ -495,8 +655,8 @@ class TestVercelAiSdk:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "AGENT"
         assert obs["agent_name"] == "calcbot.turn"
-        assert obs["input"] == '{"prompt":"What is 47 + 38?"}'
-        assert obs["output"] == "The result of 47 + 38 is 85."
+        assert obs["input_messages_raw"] == '{"prompt":"What is 47 + 38?"}'
+        assert obs["output_messages_raw"] == "The result of 47 + 38 is 85."
         assert obs["provider"] == "anthropic"
         usage = obs["usage_details"]
         assert usage["input"] == 704
@@ -517,8 +677,8 @@ class TestVercelAiSdk:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "TOOL"
         assert obs["tool_name"] == "add"
-        assert obs["input"] == '{"a":47,"b":38}'
-        assert obs["output"] == "85"
+        assert obs["input_messages_raw"] == '{"a":47,"b":38}'
+        assert obs["output_messages_raw"] == "85"
 
     def test_stream_text_maps_to_agent(self):
         span = _mock_span(
@@ -528,13 +688,88 @@ class TestVercelAiSdk:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "AGENT"
 
-    def test_embed_maps_to_embedding(self):
+    def test_embed_maps_to_embeddings(self):
         span = _mock_span(
             scope_name="ai",
             attributes={"ai.operationId": "ai.embed"},
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["type"] == "EMBEDDING"
+        assert obs["type"] == "EMBEDDINGS"
+
+    def test_embed_many_maps_to_embeddings(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={"ai.operationId": "ai.embedMany"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
+
+    def test_embed_do_embed_maps_to_embeddings_with_model(self):
+        # Inner provider-call spans carry `ai.model.id` — without an explicit
+        # EMBEDDINGS match they would fall through to core's
+        # "model present ⇒ GENERATION" rule.
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.embed.doEmbed",
+                "ai.model.id": "text-embedding-ada-002",
+                "ai.model.provider": "openai.embeddings",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
+        assert obs["model"] == "text-embedding-ada-002"
+
+    def test_embed_many_do_embed_maps_to_embeddings_with_model(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.embedMany.doEmbed",
+                "ai.model.id": "text-embedding-ada-002",
+                "ai.model.provider": "openai.embeddings",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
+        assert obs["model"] == "text-embedding-ada-002"
+
+    def test_aggregates_ai_prompt_tools_into_tool_definitions(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText.doStream",
+                "ai.prompt.tools": [
+                    '{"type":"function","name":"addResource",'
+                    '"description":"add a resource",'
+                    '"inputSchema":{"type":"object",'
+                    '"properties":{"content":{"type":"string"}},'
+                    '"required":["content"]}}',
+                    '{"type":"function","name":"getInformation",'
+                    '"description":"look up",'
+                    '"inputSchema":{"type":"object",'
+                    '"properties":{"q":{"type":"string"}},'
+                    '"required":["q"]}}',
+                ],
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        defs = obs["tool_definitions"]
+        assert isinstance(defs, list)
+        assert len(defs) == 2
+        assert defs[0]["name"] == "addResource"
+        assert defs[0]["type"] == "function"
+        assert defs[1]["name"] == "getInformation"
+
+    def test_keeps_unparseable_ai_prompt_tools_entries_verbatim(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText.doStream",
+                "ai.prompt.tools": ["not json", '{"name":"ok"}'],
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["tool_definitions"] == ["not json", {"name": "ok"}]
 
     def test_do_generate_with_tool_calls_output(self):
         span = _mock_span(
@@ -553,11 +788,11 @@ class TestVercelAiSdk:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == (
+        assert obs["input_messages_raw"] == (
             '[{"role":"user","content":'
             '[{"type":"text","text":"What is 47 + 38?"}]}]'
         )
-        assert obs["output"] == (
+        assert obs["output_messages_raw"] == (
             '[{"toolCallId":"toolu_1","toolName":"add",'
             '"input":"{\\"a\\":47,\\"b\\":38}"}]'
         )
@@ -573,8 +808,8 @@ class TestVercelAiSdk:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == '[{"role":"user","content":"hi"}]'
-        assert obs["output"] == "hello"
+        assert obs["input_messages_raw"] == '[{"role":"user","content":"hi"}]'
+        assert obs["output_messages_raw"] == "hello"
 
     def test_do_generate_falls_through_to_otel_genai(self):
         span = _mock_span(

@@ -13,10 +13,16 @@ from kubit_otel.span_filter import (
     is_genai_span,
     is_known_llm_instrumentor,
     is_kubit_span,
+    is_langgraph_internal_span,
 )
 
 
-def _span(scope_name: str | None = None, attrs: dict | None = None):
+def _span(
+    scope_name: str | None = None,
+    attrs: dict | None = None,
+    *,
+    name: str = "test-span",
+):
     span = MagicMock()
     if scope_name is None:
         span.instrumentation_scope = None
@@ -24,6 +30,7 @@ def _span(scope_name: str | None = None, attrs: dict | None = None):
         span.instrumentation_scope = MagicMock()
         span.instrumentation_scope.name = scope_name
     span.attributes = attrs or {}
+    span.name = name
     return span
 
 
@@ -108,6 +115,57 @@ class TestIsDefaultExportSpan:
             )
             is False
         )
+
+    def test_false_for_langgraph_channelwrite_even_on_known_scope(self):
+        assert (
+            is_default_export_span(
+                _span("langfuse-sdk", name="ChannelWrite<__start__:agent>")
+            )
+            is False
+        )
+
+    def test_false_for_langgraph_pseudo_node_even_on_known_scope(self):
+        assert (
+            is_default_export_span(_span("langfuse-sdk", name="__start__")) is False
+        )
+
+    def test_langgraph_filter_overrides_genai_attribute(self):
+        assert (
+            is_default_export_span(
+                _span(
+                    "langfuse-sdk",
+                    {"gen_ai.request.model": "gpt-4"},
+                    name="ChannelWrite<...,agent>",
+                )
+            )
+            is False
+        )
+
+
+class TestIsLangGraphInternalSpan:
+    def test_matches_channelwrite_prefix(self):
+        assert is_langgraph_internal_span(_span(name="ChannelWrite<...>")) is True
+        assert (
+            is_langgraph_internal_span(_span(name="ChannelWrite<__start__:agent>"))
+            is True
+        )
+        assert (
+            is_langgraph_internal_span(_span(name="ChannelWrite<...,tools>")) is True
+        )
+
+    def test_matches_start_and_end_pseudo_nodes(self):
+        assert is_langgraph_internal_span(_span(name="__start__")) is True
+        assert is_langgraph_internal_span(_span(name="__end__")) is True
+
+    def test_does_not_match_meaningful_node_names(self):
+        for n in (
+            "agent",
+            "tools",
+            "RunnableSequence",
+            "ChatOpenAI",
+            "Branch<agent,continue,__end__>",
+        ):
+            assert is_langgraph_internal_span(_span(name=n)) is False, n
 
 
 def test_known_prefixes_contains_kubit():

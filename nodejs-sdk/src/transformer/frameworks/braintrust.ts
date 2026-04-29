@@ -9,6 +9,13 @@
  */
 
 import { cleanDiscriminator, safeFloat } from "../helpers";
+import {
+  coerceToMessages,
+  stringifyForText,
+  textMessage,
+  unpackIndexedMessages,
+} from "../messages";
+import type { CanonicalMessages, Message } from "./types";
 import { makeAdapter } from "./makeAdapter";
 
 // Some emitters namespace the discriminator under `braintrust.` per OTel
@@ -71,6 +78,21 @@ export const adapter = makeAdapter({
       unpackIndexed(attrs, OUTPUT_INDEX_PREFIX),
     ];
   },
+  normalizeMessages(attrs): CanonicalMessages | null {
+    const indexedIn = unpackIndexedMessages(attrs, INPUT_INDEX_PREFIX, "");
+    const indexedOut = unpackIndexedMessages(attrs, OUTPUT_INDEX_PREFIX, "");
+
+    const input = indexedIn
+      ?? jsonToMessages(attrs["braintrust.input_json"], "user")
+      ?? jsonToMessages(attrs["gen_ai.prompt_json"], "user");
+
+    const output = indexedOut
+      ?? jsonToMessages(attrs["braintrust.output_json"], "assistant")
+      ?? jsonToMessages(attrs["gen_ai.completion_json"], "assistant");
+
+    if (input === null && output === null) return null;
+    return { input, output };
+  },
   parseUsageBlobs(attrs, usageDetails) {
     for (const [key, value] of Object.entries(attrs)) {
       if (!key.startsWith(METRICS_PREFIX)) continue;
@@ -102,3 +124,12 @@ export const adapter = makeAdapter({
     }
   },
 });
+
+function jsonToMessages(raw: unknown, role: "user" | "assistant"): Message[] | null {
+  if (raw === undefined || raw === null) return null;
+  const coerced = coerceToMessages(raw);
+  if (coerced && coerced.length > 0) return coerced;
+  const str = stringifyForText(raw);
+  if (!str) return null;
+  return [textMessage(role, str)];
+}

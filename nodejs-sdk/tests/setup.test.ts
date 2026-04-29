@@ -3,7 +3,7 @@ import { trace } from "@opentelemetry/api";
 import type { Resource } from "@opentelemetry/resources";
 
 // Silence the real exporter so configure() can run without creds.
-vi.mock("./exporter", () => ({
+vi.mock("../src/exporter", () => ({
   KubitExporter: class {
     export() {}
     shutdown() {
@@ -17,7 +17,7 @@ vi.mock("./exporter", () => ({
 
 async function loadSetup() {
   vi.resetModules();
-  return await import("./setup");
+  return await import("../src/setup");
 }
 
 describe("configure()", () => {
@@ -61,7 +61,7 @@ describe("configure()", () => {
 
   it("attaches a KubitSpanProcessor to the new provider", async () => {
     const { configure } = await loadSetup();
-    const { KubitSpanProcessor } = await import("./processor");
+    const { KubitSpanProcessor } = await import("../src/processor");
     const provider = configure({ apiKey: "rg.v1.x.y", serviceName: "my-app" });
 
     // BasicTracerProvider in v2 wraps configured processors in a single

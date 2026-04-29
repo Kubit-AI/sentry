@@ -8,13 +8,16 @@
  *
  * Ordering rationale:
  *   1. otelGenai     — the standard. Most specific, most authoritative.
- *   2. openinference — large installed base (Arize Phoenix) `llm.*` namespace.
- *   3. generic       — short-name catch-alls (`model`, `input`, `output`).
+ *   2. openinference — large installed base (Arize Phoenix) with its own
+ *                      `llm.*` namespace; predates the OTel GenAI spec.
+ *   3. generic       — short-name catch-alls (`model`, `input`, `output`)
+ *                      kept between OI and Langfuse to preserve pre-refactor priority.
  *   4. langsmith     — `langsmith.*` + token-detail JSON blobs.
  *   5. langfuse      — `langfuse.*` + usage/cost/params JSON blobs.
  *   6. braintrust    — `braintrust.*` JSON payloads + metrics.
- *   7. traceloop     — OpenLLMetry + underscore cache + indexed prompts.
- *   8. vercelAi      — raw `ai.*` (apps without the ai-sdk-otel-adapter).
+ *   7. traceloop     — OpenLLMetry `traceloop.*` + underscore cache variant
+ *                      + indexed `gen_ai.prompt.<n>.*` legacy unpacking.
+ *   8. vercelAi      — raw `ai.*` namespace (apps without the ai-sdk-otel-adapter).
  *   9. openaiAgents  — reserved slot; agent keys live on `otelGenai`.
  *   10. logfire      — `logfire.tags` + `pydantic_ai.all_messages`.
  */

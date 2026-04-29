@@ -7,6 +7,10 @@ pre-refactor transformer.
 
 from __future__ import annotations
 
+from typing import Any
+
+from ..messages import coerce_to_messages, stringify_for_text, text_message
+
 NAME = "generic"
 
 MODEL_ATTRS = ("model",)
@@ -38,3 +42,27 @@ SYSTEM_INSTRUCTIONS_ATTRS: tuple[str, ...] = ()
 CACHE_TOKEN_MAP: tuple[tuple[str, str], ...] = ()
 PARAMS_BLOB_ATTRS: tuple[str, ...] = ()
 FLAT_PARAM_ATTRS: tuple[str, ...] = ()
+
+
+def normalize_messages(span_attrs: dict) -> dict | None:
+    """Last-resort wrap. ``coerce_to_messages`` first so a JSON-string with an
+    OpenAI-shape array still surfaces as structured messages even on this
+    generic path.
+    """
+    input_msgs = _wrap(span_attrs.get("input"), "user")
+    output_msgs = _wrap(span_attrs.get("output"), "assistant")
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _wrap(val: Any, role: str) -> list | None:
+    if val is None:
+        return None
+    coerced = coerce_to_messages(val)
+    if coerced:
+        return coerced
+    text = stringify_for_text(val)
+    if not text:
+        return None
+    return [text_message(role, text)]

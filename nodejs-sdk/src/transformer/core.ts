@@ -17,7 +17,12 @@ import {
   PROMPT_NAME_ATTRS,
   PROMPT_VERSION_ATTRS,
 } from "./frameworks/langfuse";
-import type { FrameworkAdapter } from "./frameworks/types";
+import type {
+  CanonicalMessages,
+  FrameworkAdapter,
+  Message,
+  Part,
+} from "./frameworks/types";
 import {
   firstAttr,
   hrDurationMs,
@@ -27,6 +32,13 @@ import {
   safeFloat,
   safeInt,
 } from "./helpers";
+import {
+  canonicalizeGenAiEvents,
+  safeJsonParse,
+  stringifyForText,
+  textPart,
+  type SpanEventLike,
+} from "./messages";
 import { DISCRIMINATOR_ORDER, FRAMEWORKS } from "./registry";
 
 const SPAN_KIND_MAP: Record<number, string> = {
@@ -153,6 +165,13 @@ export function transformSpans(
   const now = nowIsoString();
   const emittedTraces = new Set<string>();
 
+  // A span is "orphan" when its parent span ID is not present in this batch —
+  // the common cause is the HTTP/server parent being dropped upstream by the
+  // span filter. Promote orphans to roots so a `trace` record is emitted and
+  // `parent_observation_id` is cleared. Per-batch only; no cross-batch state.
+  const batchSpanIds = new Set<string>();
+  for (const s of spans) batchSpanIds.add(s.spanContext().spanId);
+
   const withClaim = (rec: KubitRecord): KubitRecord => {
     (rec as Record<string, unknown>)._wid_claim = widClaim;
     return rec;
@@ -169,7 +188,7 @@ export function transformSpans(
     const traceId = span.spanContext().traceId;
     const spanId = span.spanContext().spanId;
     const parentId = span.parentSpanContext?.spanId || null;
-    const isRoot = parentId === null || parentId === "";
+    const isRoot = !parentId || !batchSpanIds.has(parentId);
 
     const startIso = hrTimeToIso(span.startTime);
     const endIso = hrTimeToIso(span.endTime);
@@ -205,6 +224,7 @@ export function transformSpans(
     }
 
     const traceEventIO = isRoot ? unpackGenAiEvents(span) : null;
+    const canonicalMessages = resolveCanonicalMessages(spanAttrs, span);
 
     if (isRoot && !emittedTraces.has(traceId)) {
       emittedTraces.add(traceId);
@@ -222,8 +242,10 @@ export function transformSpans(
           environment: deploymentEnv,
           metadata: { ...metadata },
           tags,
-          input: resolveInput(spanAttrs) ?? traceEventIO?.[0] ?? null,
-          output: resolveOutput(spanAttrs) ?? traceEventIO?.[1] ?? null,
+          input: canonicalMessages.input,
+          output: canonicalMessages.output,
+          input_messages_raw: resolveInput(spanAttrs) ?? traceEventIO?.[0] ?? null,
+          output_messages_raw: resolveOutput(spanAttrs) ?? traceEventIO?.[1] ?? null,
           public: false,
           bookmarked: false,
           timestamp: startIso,
@@ -292,7 +314,7 @@ export function transformSpans(
         entity_type: "enriched_observation",
         id: spanId,
         trace_id: traceId,
-        parent_observation_id: parentId,
+        parent_observation_id: isRoot ? null : parentId,
         name: span.name,
         type: obsType,
         project_id: wid,
@@ -322,8 +344,10 @@ export function transformSpans(
         agent_version: firstAttr(spanAttrs, AGENT_VERSION_ATTRS) ?? null,
         tool_name: firstAttr(spanAttrs, TOOL_NAME_ATTRS) ?? null,
         system_instructions: firstAttr(spanAttrs, SYSTEM_INSTRUCTIONS_ATTRS) ?? null,
-        input: inputText,
-        output: outputText,
+        input: canonicalMessages.input,
+        output: canonicalMessages.output,
+        input_messages_raw: inputText,
+        output_messages_raw: outputText,
         metadata: { ...metadata },
         provided_usage_details: usageDetails,
         usage_details: usageDetails,
@@ -333,9 +357,12 @@ export function transformSpans(
         prompt_id: firstAttr(spanAttrs, PROMPT_ID_ATTRS) ?? null,
         prompt_name: firstAttr(spanAttrs, PROMPT_NAME_ATTRS) ?? null,
         prompt_version: safeInt(firstAttr(spanAttrs, PROMPT_VERSION_ATTRS)),
-        tool_definitions: firstAttr(spanAttrs, TOOL_DEFINITIONS_ATTRS) ?? null,
-        tool_calls: firstAttr(spanAttrs, TOOL_CALLS_ATTRS) ?? null,
-        tool_call_names: firstAttr(spanAttrs, TOOL_CALL_NAMES_ATTRS) ?? null,
+        tool_definitions: aggregateToolDefinitions(spanAttrs)
+                          ?? firstAttr(spanAttrs, TOOL_DEFINITIONS_ATTRS) ?? null,
+        tool_calls: firstAttr(spanAttrs, TOOL_CALLS_ATTRS)
+                    ?? deriveToolCallsFromMessages(canonicalMessages.output),
+        tool_call_names: firstAttr(spanAttrs, TOOL_CALL_NAMES_ATTRS)
+                         ?? deriveToolCallNamesFromMessages(canonicalMessages.output),
         tags,
         event_ts: startIso,
         created_at: now,
@@ -409,6 +436,48 @@ function resolveProvider(spanAttrs: Record<string, unknown>): string | null {
   return null;
 }
 
+function aggregateToolDefinitions(spanAttrs: Record<string, unknown>): unknown[] | null {
+  for (const fw of FRAMEWORKS) {
+    if (!fw.aggregateToolDefinitions) continue;
+    const result = fw.aggregateToolDefinitions(spanAttrs);
+    if (result && result.length > 0) return result;
+  }
+  return null;
+}
+
+/**
+ * Derive `tool_calls` from canonical output messages when no adapter
+ * exposed a dedicated attribute. Walks every assistant message's parts
+ * and collects the discriminated `tool_call` parts as-is. Returns `null`
+ * when nothing was found so the caller's `?? null` chain stays clean.
+ */
+function deriveToolCallsFromMessages(
+  messages: Message[] | null,
+): unknown[] | null {
+  if (!messages) return null;
+  const out: unknown[] = [];
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    for (const p of m.parts) {
+      if ((p as { type?: unknown }).type === "tool_call") out.push(p);
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
+function deriveToolCallNamesFromMessages(
+  messages: Message[] | null,
+): string[] | null {
+  const calls = deriveToolCallsFromMessages(messages);
+  if (!calls) return null;
+  const names: string[] = [];
+  for (const tc of calls) {
+    const n = (tc as { name?: unknown }).name;
+    if (typeof n === "string") names.push(n);
+  }
+  return names.length > 0 ? names : null;
+}
+
 type SpanEvent = {
   name: string;
   attributes?: Record<string, unknown>;
@@ -449,6 +518,102 @@ function unpackGenAiEvents(
     ? JSON.stringify(outputs.sort(sortByTime).map((e) => e.msg))
     : null;
   return [inputStr, outputStr];
+}
+
+/**
+ * Build the canonical OTel GenAI v2 message arrays for both directions, in
+ * priority order:
+ *   1. Each adapter's `normalizeMessages` hook (registry order; per-side
+ *      first-non-null wins so a Vercel input + Langfuse output combo works).
+ *   2. Span-event fallback for emitters that put messages on
+ *      `gen_ai.user.message` / `gen_ai.choice` / etc. events rather than
+ *      attributes.
+ *   3. `gen_ai.system_instructions` injection: prepended as the leading
+ *      `role: "system"` message when not already present at the head of input.
+ *
+ * No fallback text-wraps the legacy raw `INPUT_ATTRS` / `OUTPUT_ATTRS` value:
+ * those attrs may carry opaque entity blobs (e.g. `traceloop.entity.input`
+ * with `{inputs, tags, metadata, kwargs}`), and synthesizing a single fake
+ * `[{role:user, parts:[text:<blob>]}]` envelope misrepresents non-
+ * conversational data as a chat turn. Adapters that want a text fallback
+ * (e.g. legacy `gen_ai.prompt` strings) emit it from their own
+ * `normalizeMessages` hook.
+ */
+function resolveCanonicalMessages(
+  spanAttrs: Record<string, unknown>,
+  span: ReadableSpan,
+): CanonicalMessages {
+  let input: Message[] | null = null;
+  let output: Message[] | null = null;
+
+  for (const fw of FRAMEWORKS) {
+    if (input !== null && output !== null) break;
+    const r = fw.normalizeMessages?.(spanAttrs);
+    if (!r) continue;
+    if (input === null && r.input !== null) input = r.input;
+    if (output === null && r.output !== null) output = r.output;
+  }
+
+  if (input === null || output === null) {
+    const events = (span as unknown as { events?: SpanEventLike[] }).events;
+    const ev = canonicalizeGenAiEvents(events);
+    if (input === null) input = ev.input;
+    if (output === null) output = ev.output;
+  }
+
+  const sysMsg = parseSystemInstructions(spanAttrs["gen_ai.system_instructions"]);
+  if (sysMsg) {
+    if (input === null || input.length === 0 || input[0].role !== "system") {
+      input = [sysMsg, ...(input ?? [])];
+    }
+  }
+
+  return { input, output };
+}
+
+/**
+ * Parse `gen_ai.system_instructions` (per OTel spec: an array of parts) into a
+ * canonical `system`-role message. Tolerates plain-string emitters (wraps as
+ * a single TextPart) and JSON-stringified arrays.
+ */
+function parseSystemInstructions(raw: unknown): Message | null {
+  if (raw === undefined || raw === null) return null;
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    const parsed = safeJsonParse(raw);
+    value = parsed ?? raw;
+  }
+  if (Array.isArray(value)) {
+    const parts: Part[] = [];
+    for (const item of value) {
+      if (typeof item === "string") {
+        parts.push(textPart(item));
+        continue;
+      }
+      if (item && typeof item === "object") {
+        const obj = item as Record<string, unknown>;
+        if (typeof obj.type === "string") {
+          parts.push(obj as Part);
+          continue;
+        }
+        // Fallback: stringify a structured value with no `type`.
+        parts.push(textPart(stringifyForText(item)));
+        continue;
+      }
+      // Non-string non-object items (numbers, booleans). Out-of-spec but
+      // text-wrap them rather than drop, mirroring the Python adapter so
+      // both SDKs produce the same number of parts.
+      if (item !== null && item !== undefined) {
+        parts.push(textPart(stringifyForText(item)));
+      }
+    }
+    if (parts.length === 0) return null;
+    return { role: "system", parts };
+  }
+  if (typeof value === "string" && value.length > 0) {
+    return { role: "system", parts: [textPart(value)] };
+  }
+  return null;
 }
 
 function buildModelParameters(spanAttrs: Record<string, unknown>): unknown {

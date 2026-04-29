@@ -26,6 +26,12 @@ from .helpers import (
     safe_float,
     safe_int,
 )
+from .messages import (
+    canonicalize_gen_ai_events,
+    safe_json_parse,
+    stringify_for_text,
+    text_part,
+)
 from .registry import DISCRIMINATOR_ORDER, FRAMEWORKS
 
 logger = logging.getLogger(__name__)
@@ -127,6 +133,13 @@ def transform_spans(
     now = now_iso()
     emitted_traces: set[str] = set()
 
+    # Orphan-as-root: a span whose parent isn't in this batch is treated as
+    # a root. Common cause is the HTTP/server parent being dropped upstream
+    # by the span filter. Per-batch only; no cross-batch state.
+    batch_span_ids: set[str] = {
+        format(s.context.span_id, "016x") for s in spans
+    }
+
     def _with_claim(rec: dict[str, Any]) -> dict[str, Any]:
         rec["_wid_claim"] = wid_claim
         return rec
@@ -148,7 +161,7 @@ def transform_spans(
             if span.parent and span.parent.span_id
             else None
         )
-        is_root = parent_id is None
+        is_root = parent_id is None or parent_id not in batch_span_ids
 
         start_iso = nanos_to_iso(span.start_time)
         end_iso = nanos_to_iso(span.end_time)
@@ -190,6 +203,7 @@ def transform_spans(
                 enrich(span_attrs, metadata)
 
         event_input, event_output = _unpack_gen_ai_events(span)
+        canonical_messages = _resolve_canonical_messages(span_attrs, span)
         trace_name_override = span_attrs.get(_LANGFUSE_TRACE_NAME_ATTR)
 
         if is_root and trace_id not in emitted_traces:
@@ -207,8 +221,10 @@ def transform_spans(
                 "environment": deployment_env,
                 "metadata": dict(metadata),
                 "tags": tags,
-                "input": _resolve_input(span_attrs) or event_input,
-                "output": _resolve_output(span_attrs) or event_output,
+                "input": canonical_messages["input"],
+                "output": canonical_messages["output"],
+                "input_messages_raw": _resolve_input(span_attrs) or event_input,
+                "output_messages_raw": _resolve_output(span_attrs) or event_output,
                 "public": False,
                 "bookmarked": False,
                 "timestamp": start_iso,
@@ -285,7 +301,7 @@ def transform_spans(
             "entity_type": "enriched_observation",
             "id": span_id,
             "trace_id": trace_id,
-            "parent_observation_id": parent_id,
+            "parent_observation_id": None if is_root else parent_id,
             "name": span.name,
             "type": obs_type,
             "project_id": wid,
@@ -313,8 +329,10 @@ def transform_spans(
             "agent_version": first_attr(span_attrs, AGENT_VERSION_ATTRS),
             "tool_name": first_attr(span_attrs, TOOL_NAME_ATTRS),
             "system_instructions": first_attr(span_attrs, SYSTEM_INSTRUCTIONS_ATTRS),
-            "input": input_text,
-            "output": output_text,
+            "input": canonical_messages["input"],
+            "output": canonical_messages["output"],
+            "input_messages_raw": input_text,
+            "output_messages_raw": output_text,
             "metadata": dict(metadata),
             "provided_usage_details": usage_details,
             "usage_details": usage_details,
@@ -324,9 +342,12 @@ def transform_spans(
             "prompt_id": first_attr(span_attrs, _langfuse.PROMPT_ID_ATTRS),
             "prompt_name": first_attr(span_attrs, _langfuse.PROMPT_NAME_ATTRS),
             "prompt_version": safe_int(first_attr(span_attrs, _langfuse.PROMPT_VERSION_ATTRS)),
-            "tool_definitions": first_attr(span_attrs, TOOL_DEFINITIONS_ATTRS),
-            "tool_calls": first_attr(span_attrs, TOOL_CALLS_ATTRS),
-            "tool_call_names": first_attr(span_attrs, TOOL_CALL_NAMES_ATTRS),
+            "tool_definitions": _aggregate_tool_definitions(span_attrs)
+                                or first_attr(span_attrs, TOOL_DEFINITIONS_ATTRS),
+            "tool_calls": first_attr(span_attrs, TOOL_CALLS_ATTRS)
+                          or _derive_tool_calls_from_messages(canonical_messages["output"]),
+            "tool_call_names": first_attr(span_attrs, TOOL_CALL_NAMES_ATTRS)
+                               or _derive_tool_call_names_from_messages(canonical_messages["output"]),
             "tags": tags,
             "event_ts": start_iso,
             "created_at": now,
@@ -453,6 +474,129 @@ def _resolve_provider(span_attrs: dict) -> Optional[str]:
         if val is None:
             continue
         return val if isinstance(val, str) else str(val)
+    return None
+
+
+def _aggregate_tool_definitions(span_attrs: dict) -> Optional[list]:
+    """Aggregate ``tool_definitions`` from non-blob sources (e.g. indexed
+    ``llm.tools.<n>.tool.json_schema``). First non-empty adapter result wins;
+    falls back to ``first_attr(TOOL_DEFINITIONS_ATTRS)`` in the caller.
+    """
+    for fw in FRAMEWORKS:
+        agg = getattr(fw, "aggregate_tool_definitions", None)
+        if agg is None:
+            continue
+        result = agg(span_attrs)
+        if result:
+            return result
+    return None
+
+
+def _derive_tool_calls_from_messages(messages: Optional[list]) -> Optional[list]:
+    """Derive ``tool_calls`` from canonical output messages when no adapter
+    exposed a dedicated attribute. Walks every assistant message's parts and
+    collects the discriminated ``tool_call`` parts as-is. Returns ``None``
+    when nothing was found so the caller's fallback chain stays clean.
+    """
+    if not messages:
+        return None
+    out: list = []
+    for m in messages:
+        if m.get("role") != "assistant":
+            continue
+        for p in m.get("parts", []):
+            if isinstance(p, dict) and p.get("type") == "tool_call":
+                out.append(p)
+    return out if out else None
+
+
+def _derive_tool_call_names_from_messages(messages: Optional[list]) -> Optional[list]:
+    calls = _derive_tool_calls_from_messages(messages)
+    if not calls:
+        return None
+    names = [tc.get("name") for tc in calls if isinstance(tc.get("name"), str)]
+    return names if names else None
+
+
+def _resolve_canonical_messages(span_attrs: dict, span: Any) -> dict:
+    """Build the canonical OTel GenAI v2 message arrays for both directions.
+
+    Priority order:
+      1. Each adapter's ``normalize_messages`` hook (registry order; per-side
+         first-non-null wins so a Vercel input + Langfuse output combo works).
+      2. Span-event fallback for emitters that put messages on
+         ``gen_ai.user.message`` / ``gen_ai.choice`` / etc. events rather than
+         attributes.
+      3. ``gen_ai.system_instructions`` injection: prepended as the leading
+         ``role: "system"`` message when not already present at head of input.
+
+    No fallback text-wraps the legacy raw INPUT_ATTRS / OUTPUT_ATTRS value:
+    those attrs may carry opaque entity blobs (e.g. ``traceloop.entity.input``
+    with ``{inputs, tags, metadata, kwargs}``), and synthesizing a single fake
+    ``[{role:"user", parts:[text:<blob>]}]`` envelope misrepresents non-
+    conversational data as a chat turn. Adapters that want a text fallback
+    (e.g. legacy ``gen_ai.prompt`` strings) emit it from their own
+    ``normalize_messages`` hook.
+    """
+    input_msgs: Optional[list] = None
+    output_msgs: Optional[list] = None
+
+    for fw in FRAMEWORKS:
+        if input_msgs is not None and output_msgs is not None:
+            break
+        normalize = getattr(fw, "normalize_messages", None)
+        if normalize is None:
+            continue
+        result = normalize(span_attrs)
+        if not result:
+            continue
+        if input_msgs is None and result.get("input") is not None:
+            input_msgs = result["input"]
+        if output_msgs is None and result.get("output") is not None:
+            output_msgs = result["output"]
+
+    if input_msgs is None or output_msgs is None:
+        ev = canonicalize_gen_ai_events(getattr(span, "events", None))
+        if input_msgs is None:
+            input_msgs = ev["input"]
+        if output_msgs is None:
+            output_msgs = ev["output"]
+
+    sys_msg = _parse_system_instructions(span_attrs.get("gen_ai.system_instructions"))
+    if sys_msg is not None:
+        if not input_msgs or input_msgs[0].get("role") != "system":
+            input_msgs = [sys_msg] + (input_msgs or [])
+
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _parse_system_instructions(raw: Any) -> Optional[dict]:
+    """Parse ``gen_ai.system_instructions`` into a canonical ``system`` message.
+
+    Spec form is an array of parts (e.g. ``[{"type": "text", "content": "..."}]``);
+    tolerates plain-string emitters (wraps as a single TextPart) and
+    JSON-stringified arrays.
+    """
+    if raw is None:
+        return None
+    value: Any = raw
+    if isinstance(raw, str):
+        parsed = safe_json_parse(raw)
+        value = parsed if parsed is not None else raw
+    if isinstance(value, list):
+        parts: list = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(text_part(item))
+            elif isinstance(item, dict) and isinstance(item.get("type"), str):
+                parts.append(item)
+            elif item is not None:
+                parts.append(text_part(stringify_for_text(item)))
+        if not parts:
+            return None
+        return {"role": "system", "parts": parts}
+    if isinstance(value, str) and value:
+        return {"role": "system", "parts": [text_part(value)]}
     return None
 
 

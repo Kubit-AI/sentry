@@ -112,6 +112,21 @@ export function isKnownLLMInstrumentor(span: ReadableSpan): boolean {
   );
 }
 
+/**
+ * LangGraph's Pregel runtime emits coordination spans (`ChannelWrite<...>`,
+ * `__start__`, `__end__`) around every node transition. They carry no LLM
+ * payload, clutter the trace tree, and Langfuse hides them at the UI layer.
+ * The default Kubit filter drops them on ingest.
+ */
+export function isLangGraphInternalSpan(span: ReadableSpan): boolean {
+  const name = span.name;
+  if (typeof name !== "string") return false;
+  return (
+    name.startsWith("ChannelWrite") || name === "__start__" || name === "__end__"
+  );
+}
+
 export function isDefaultExportSpan(span: ReadableSpan): boolean {
+  if (isLangGraphInternalSpan(span)) return false;
   return isKubitSpan(span) || isGenAISpan(span) || isKnownLLMInstrumentor(span);
 }

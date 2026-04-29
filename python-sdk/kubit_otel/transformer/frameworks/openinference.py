@@ -14,9 +14,20 @@ output slot when no ``llm.output_messages`` are present.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 from ..helpers import clean_discriminator
+from ..messages import (
+    coerce_to_messages,
+    find_langchain_model_provider,
+    generic_part,
+    langchain_envelope_to_canonical,
+    safe_json_parse,
+    tool_call_part,
+    tool_call_response_part,
+    unpack_indexed_messages,
+)
 
 NAME = "openinference"
 
@@ -72,7 +83,7 @@ PROVIDER_ATTRS = (
 AGENT_NAME_ATTRS: tuple[str, ...] = ()
 AGENT_ID_ATTRS: tuple[str, ...] = ()
 AGENT_VERSION_ATTRS: tuple[str, ...] = ()
-TOOL_NAME_ATTRS: tuple[str, ...] = ()
+TOOL_NAME_ATTRS = ("tool.name",)
 SYSTEM_INSTRUCTIONS_ATTRS: tuple[str, ...] = ()
 
 CACHE_TOKEN_MAP = (
@@ -97,6 +108,8 @@ def resolve_observation_type(span_attrs: dict) -> str | None:
         return None
     if oi == "llm":
         return "GENERATION"
+    if oi == "embedding":
+        return "EMBEDDINGS"
     return oi.upper()
 
 
@@ -161,3 +174,182 @@ def _unpack_indexed(span_attrs: dict, prefix: str) -> Optional[str]:
         return None
     ordered = [messages[i] for i in sorted(messages)]
     return json.dumps(ordered)
+
+
+def resolve_provider(span_attrs: dict) -> Optional[str]:
+    """LangChain hides the provider inside the AIMessage envelope on
+    ``output.value``. OpenInference's own ``llm.provider`` / ``llm.system``
+    aliases handle the common case via ``PROVIDER_ATTRS`` in core.
+    """
+    return find_langchain_model_provider(span_attrs.get("output.value"))
+
+
+_TOOL_DEF_RE = re.compile(r"^llm\.tools\.(\d+)\.tool\.json_schema$")
+
+
+def aggregate_tool_definitions(span_attrs: dict) -> Optional[list]:
+    """Walk indexed ``llm.tools.<n>.tool.json_schema`` attrs and return the
+    parsed schemas in index order. Returns ``None`` if no indexed tools.
+    """
+    tools: dict[int, Any] = {}
+    for key, value in span_attrs.items():
+        if not isinstance(key, str):
+            continue
+        m = _TOOL_DEF_RE.match(key)
+        if not m:
+            continue
+        try:
+            idx = int(m.group(1))
+        except ValueError:
+            continue
+        if isinstance(value, str):
+            parsed = safe_json_parse(value)
+            tools[idx] = parsed if parsed is not None else value
+        else:
+            tools[idx] = value
+    if not tools:
+        return None
+    return [tools[i] for i in sorted(tools)]
+
+
+def normalize_messages(span_attrs: dict) -> dict | None:
+    # Try LangChain Serializable envelope first — structurally richer than
+    # the indexed projection (which loses tool_use parts on assistant
+    # messages). Only fires when the blob actually IS a LangChain shape.
+    lc_in = (
+        _langchain_blob(span_attrs.get("input.value"))
+        or _langchain_blob(span_attrs.get("llm.input_messages"))
+    )
+    lc_out = (
+        _langchain_blob(span_attrs.get("output.value"))
+        or _langchain_blob(span_attrs.get("llm.output_messages"))
+    )
+
+    indexed_in = unpack_indexed_messages(span_attrs, _INPUT_INDEX_PREFIX, "message.")
+    indexed_out = unpack_indexed_messages(span_attrs, _OUTPUT_INDEX_PREFIX, "message.")
+
+    # TOOL-span synthesis: for spans where ``tool.name`` + raw-args input +
+    # ToolMessage envelope output is the LangChain shape, synthesis is
+    # strictly better than the text-wrap fallback (which would wrap the args
+    # JSON as a user text part). Returns (None, None) for non-TOOL spans.
+    synth_in, synth_out = _synthesize_tool_span_messages(span_attrs)
+
+    input_msgs = (
+        lc_in
+        or indexed_in
+        or synth_in
+        or _blob_to_messages(span_attrs.get("llm.input_messages"), "user")
+        or _blob_to_messages(span_attrs.get("llm.prompts"), "user")
+        or _blob_to_messages(span_attrs.get("input.value"), "user")
+    )
+    output_msgs = (
+        lc_out
+        or indexed_out
+        or synth_out
+        or _blob_to_messages(span_attrs.get("llm.output_messages"), "assistant")
+        or _blob_to_messages(span_attrs.get("llm.completions"), "assistant")
+        or _blob_to_messages(span_attrs.get("output.value"), "assistant")
+    )
+
+    # Retriever-span fallback (unchanged).
+    if output_msgs is None:
+        doc_msg = _retrieval_docs_to_message(span_attrs)
+        if doc_msg is not None:
+            output_msgs = [doc_msg]
+
+    if input_msgs is None and output_msgs is None:
+        return None
+    return {"input": input_msgs, "output": output_msgs}
+
+
+def _langchain_blob(raw: Any) -> Optional[list]:
+    if raw is None:
+        return None
+    parsed = safe_json_parse(raw) if isinstance(raw, str) else raw
+    if parsed is None and isinstance(raw, str):
+        parsed = raw
+    return langchain_envelope_to_canonical(parsed)
+
+
+def _blob_to_messages(raw: Any, _role: str) -> Optional[list]:
+    if raw is None:
+        return None
+    # 1. LangChain Serializable envelope (richer than coerced OpenAI form) wins.
+    lc = _langchain_blob(raw)
+    if lc is not None and len(lc) > 0:
+        return lc
+    # 2. Existing OpenAI-shape coercion.
+    coerced = coerce_to_messages(raw)
+    if coerced is not None and len(coerced) > 0:
+        return coerced
+    # No text-wrap fallback: a non-conversational JSON blob (e.g. LangGraph's
+    # ``{output:[{lg_name:"Send", args:{...}}]}`` graph-control envelope on a
+    # routing CHAIN span) shouldn't become a fake
+    # ``[{role:assistant, parts:[text:<blob>]}]`` chat message. Same call as
+    # the Traceloop entity-blob path.
+    return None
+
+
+def _synthesize_tool_span_messages(span_attrs: dict) -> tuple[Optional[list], Optional[list]]:
+    if clean_discriminator(span_attrs.get(_SPAN_KIND_ATTR)) != "tool":
+        return None, None
+    tool_name = span_attrs.get("tool.name")
+    if not isinstance(tool_name, str) or not tool_name:
+        return None, None
+
+    raw_in = span_attrs.get("input.value")
+    if isinstance(raw_in, str):
+        parsed_in = safe_json_parse(raw_in)
+        if parsed_in is None:
+            parsed_in = raw_in
+    else:
+        parsed_in = raw_in
+    input_msgs = [{
+        "role": "assistant",
+        "parts": [tool_call_part(tool_name, parsed_in, None)],
+    }]
+
+    raw_out = span_attrs.get("output.value")
+    if isinstance(raw_out, str):
+        parsed_out = safe_json_parse(raw_out)
+        if parsed_out is None:
+            parsed_out = raw_out
+    else:
+        parsed_out = raw_out
+    # First try: full LangChain envelope (handles {output:<ToolMessage>}, bare
+    # ToolMessage, etc.) — gives us a tool message with `tool_call_id` linked.
+    lc_out = langchain_envelope_to_canonical(parsed_out)
+    if lc_out:
+        output_msgs: Optional[list] = lc_out
+    elif parsed_out is not None:
+        output_msgs = [{
+            "role": "tool",
+            "parts": [tool_call_response_part(parsed_out, None)],
+        }]
+    else:
+        output_msgs = None
+
+    return input_msgs, output_msgs
+
+
+def _retrieval_docs_to_message(span_attrs: dict) -> Optional[dict]:
+    buckets: dict[int, dict[str, Any]] = {}
+    prefix_len = len(_RETRIEVAL_DOCS_PREFIX)
+    for key, value in span_attrs.items():
+        if not isinstance(key, str) or not key.startswith(_RETRIEVAL_DOCS_PREFIX):
+            continue
+        rest = key[prefix_len:]
+        head, sep, inner = rest.partition(".")
+        if not sep:
+            continue
+        try:
+            idx = int(head)
+        except ValueError:
+            continue
+        if inner.startswith("document."):
+            inner = inner[len("document."):]
+        buckets.setdefault(idx, {})[inner] = value
+    if not buckets:
+        return None
+    parts = [generic_part("retrieval_document", buckets[i]) for i in sorted(buckets)]
+    return {"role": "tool", "parts": parts}

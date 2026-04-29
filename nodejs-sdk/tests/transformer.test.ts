@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
-import { transformSpans } from "./transformer";
+import { transformSpans } from "../src/transformer";
 
 type SpanEventInput = {
   name: string;
@@ -162,7 +162,7 @@ describe("Langfuse v4 non-generation span types", () => {
     expect(obs.model).toBeNull();
     expect(obs.usage_details).toEqual({});
     expect(obs.cost_details).toEqual({});
-    expect(obs.input).toBe(JSON.stringify({ x: 1 }));
+    expect(obs.input_messages_raw).toBe(JSON.stringify({ x: 1 }));
   });
 
   it("type=tool maps to TOOL", () => {
@@ -196,6 +196,131 @@ describe("Langfuse v4 non-generation span types", () => {
       ),
     );
     expect(obs.type).toBe("AGENT");
+  });
+
+  // The Langfuse JS SDK emits `langfuse.observation.type=span` for the
+  // LangChain wrapper spans (LangGraph root, `tools`, `model_request`,
+  // `RunnableLambda`, `__start__`) where the Python SDK emits `chain`. Fold
+  // the JS literal back to CHAIN when the integration metadata says we're
+  // inside a langchain run, so cross-SDK observation types stay aligned.
+  it("type=span folds to CHAIN when ls_integration is langchain_*", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "span",
+              "langfuse.observation.metadata.ls_integration": "langchain_create_agent",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("CHAIN");
+  });
+
+  it("type=span without langchain integration stays SPAN", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "span",
+              "langfuse.observation.metadata.ls_integration": "openai",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("SPAN");
+  });
+});
+
+describe("Langfuse provider/model alias coverage", () => {
+  it("populates provider from langfuse.observation.metadata.ls_provider", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.metadata.ls_provider": "anthropic",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provider).toBe("anthropic");
+  });
+
+  it("populates provided_model_name from langfuse.observation.metadata.ls_model_name", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.metadata.ls_model_name": "claude-sonnet-4-6",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provided_model_name).toBe("claude-sonnet-4-6");
+  });
+
+  // Confirms that finding #7 (tool-span output stringified as ToolMessage
+  // Serializable JSON-blob) is closed by the langchain envelope routing
+  // already in place from the previous fix. ToolMessage Serializables in
+  // `langfuse.observation.output` should produce a clean tool_call_response
+  // part, lifting the `tool_call_id` linkage and the tool name onto the
+  // canonical message.
+  it("normalizes ToolMessage Serializable in langfuse output to tool_call_response", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "tool",
+              "langfuse.observation.output": JSON.stringify({
+                lc: 1,
+                type: "constructor",
+                id: ["langchain_core", "messages", "ToolMessage"],
+                kwargs: {
+                  status: "success",
+                  content: "85",
+                  tool_call_id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+                  name: "add",
+                  additional_kwargs: {},
+                  response_metadata: {},
+                },
+              }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.output).toEqual([
+      {
+        role: "tool",
+        name: "add",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "toolu_0183unn5QaJzKbi2w9yqPNdq",
+            response: "85",
+          },
+        ],
+      },
+    ]);
   });
 });
 
@@ -352,10 +477,15 @@ describe("root + resource mapping", () => {
     expect((obs as Record<string, unknown>).trace_name).toBe("plan_trip");
   });
 
-  it("child span carries parent_observation_id; no trace record emitted", () => {
+  it("child span carries parent_observation_id when its parent is in the batch", () => {
     const records = transformSpans(
       [
         makeSpan({
+          spanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "span" },
+        }),
+        makeSpan({
+          spanId: "ccc0000000000000",
           parentSpanId: "bbb0000000000000",
           attrs: { "langfuse.observation.type": "span" },
         }),
@@ -363,16 +493,83 @@ describe("root + resource mapping", () => {
       "wid",
       "claim",
     );
-    const [obs] = observations(records);
-    expect((obs as Record<string, unknown>).parent_observation_id).toBe(
+    const child = observations(records).find((o) => o.id === "ccc0000000000000")!;
+    expect((child as Record<string, unknown>).parent_observation_id).toBe(
       "bbb0000000000000",
     );
-    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(0);
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+  });
+});
+
+describe("orphan-as-root (per-batch detection)", () => {
+  it("orphan span (parent absent from batch) is promoted to root", () => {
+    const records = transformSpans(
+      [
+        makeSpan({
+          traceId: "aaa00000000000000000000000000000",
+          spanId: "ccc0000000000000",
+          parentSpanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "generation" },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    const t = trace(records);
+    expect(t.id).toBe("aaa00000000000000000000000000000");
+    const [obs] = observations(records);
+    expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
+    expect((obs as Record<string, unknown>).trace_name).toBe("span");
+  });
+
+  it("child span is unchanged when its parent IS in the same batch", () => {
+    const parent = makeSpan({
+      traceId: "aaa00000000000000000000000000000",
+      spanId: "bbb0000000000000",
+      attrs: { "langfuse.observation.type": "span" },
+    });
+    const child = makeSpan({
+      traceId: "aaa00000000000000000000000000000",
+      spanId: "ccc0000000000000",
+      parentSpanId: "bbb0000000000000",
+      attrs: { "langfuse.observation.type": "generation" },
+    });
+    const records = transformSpans([parent, child], "wid", "claim");
+
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+    const obs = observations(records);
+    const childObs = obs.find((o) => o.id === "ccc0000000000000")!;
+    expect((childObs as Record<string, unknown>).parent_observation_id).toBe(
+      "bbb0000000000000",
+    );
+  });
+
+  it("multiple orphans sharing a trace_id collapse to a single trace record", () => {
+    const records = transformSpans(
+      [
+        makeSpan({
+          spanId: "ccc0000000000000",
+          parentSpanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "generation" },
+        }),
+        makeSpan({
+          spanId: "ddd0000000000000",
+          parentSpanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "generation" },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+    for (const obs of observations(records)) {
+      expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
+    }
   });
 });
 
 describe("Observation type pass-through", () => {
-  it("gen_ai.operation.name=embedding maps to EMBEDDING", () => {
+  it("gen_ai.operation.name=embedding (legacy singular) maps to EMBEDDINGS", () => {
     const [obs] = observations(
       transformSpans(
         [makeSpan({ attrs: { "gen_ai.operation.name": "embedding" } })],
@@ -380,7 +577,18 @@ describe("Observation type pass-through", () => {
         "claim",
       ),
     );
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
+  });
+
+  it("gen_ai.operation.name=embeddings (plural, OTel v2 canonical) maps to EMBEDDINGS", () => {
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ attrs: { "gen_ai.operation.name": "embeddings" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
   });
 
   it("gen_ai.operation.name=execute_tool maps to TOOL", () => {
@@ -486,7 +694,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([
       { role: "system", content: "be helpful" },
       { role: "user", content: "hello" },
     ]);
@@ -510,7 +718,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { index: 0, finish_reason: "stop", message: "hi" },
     ]);
   });
@@ -530,7 +738,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe("attr-form");
+    expect(obs.input_messages_raw).toBe("attr-form");
   });
 
   it("explicit event role overrides the event-name default", () => {
@@ -550,7 +758,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect((JSON.parse(obs.input as string) as { role: string }[])[0].role).toBe(
+    expect((JSON.parse(obs.input_messages_raw as string) as { role: string }[])[0].role).toBe(
       "developer",
     );
   });
@@ -621,8 +829,8 @@ describe("Vercel AI SDK", () => {
     );
     expect(obs.type).toBe("AGENT");
     expect(obs.agent_name).toBe("calcbot.turn");
-    expect(obs.input).toBe('{"prompt":"What is 47 + 38?"}');
-    expect(obs.output).toBe("The result of 47 + 38 is 85.");
+    expect(obs.input_messages_raw).toBe('{"prompt":"What is 47 + 38?"}');
+    expect(obs.output_messages_raw).toBe("The result of 47 + 38 is 85.");
     expect(obs.provider).toBe("anthropic");
     const usage = obs.usage_details as Record<string, number>;
     expect(usage.input).toBe(704);
@@ -651,8 +859,8 @@ describe("Vercel AI SDK", () => {
     );
     expect(obs.type).toBe("TOOL");
     expect(obs.tool_name).toBe("add");
-    expect(obs.input).toBe('{"a":47,"b":38}');
-    expect(obs.output).toBe("85");
+    expect(obs.input_messages_raw).toBe('{"a":47,"b":38}');
+    expect(obs.output_messages_raw).toBe("85");
   });
 
   it("maps ai.operationId=ai.streamText to AGENT", () => {
@@ -666,7 +874,7 @@ describe("Vercel AI SDK", () => {
     expect(obs.type).toBe("AGENT");
   });
 
-  it("maps ai.operationId=ai.embed to EMBEDDING", () => {
+  it("maps ai.operationId=ai.embed to EMBEDDINGS", () => {
     const [obs] = observations(
       transformSpans(
         [makeSpan({ scopeName: "ai", attrs: { "ai.operationId": "ai.embed" } })],
@@ -674,7 +882,109 @@ describe("Vercel AI SDK", () => {
         "claim",
       ),
     );
-    expect(obs.type).toBe("EMBEDDING");
+    expect(obs.type).toBe("EMBEDDINGS");
+  });
+
+  it("maps ai.operationId=ai.embedMany to EMBEDDINGS", () => {
+    const [obs] = observations(
+      transformSpans(
+        [makeSpan({ scopeName: "ai", attrs: { "ai.operationId": "ai.embedMany" } })],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
+  });
+
+  it("maps ai.operationId=ai.embed.doEmbed to EMBEDDINGS even when a model is present", () => {
+    // Inner provider-call spans carry `ai.model.id` — without an explicit
+    // EMBEDDINGS match they would fall through to core's "model ⇒ GENERATION".
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.embed.doEmbed",
+              "ai.model.id": "text-embedding-ada-002",
+              "ai.model.provider": "openai.embeddings",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
+    expect(obs.model).toBe("text-embedding-ada-002");
+  });
+
+  it("maps ai.operationId=ai.embedMany.doEmbed to EMBEDDINGS even when a model is present", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.embedMany.doEmbed",
+              "ai.model.id": "text-embedding-ada-002",
+              "ai.model.provider": "openai.embeddings",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
+    expect(obs.model).toBe("text-embedding-ada-002");
+  });
+
+  it("aggregates ai.prompt.tools (string-array of JSON definitions) into tool_definitions", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText.doStream",
+              "ai.prompt.tools": [
+                '{"type":"function","name":"addResource","description":"add a resource","inputSchema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}',
+                '{"type":"function","name":"getInformation","description":"look up","inputSchema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}',
+              ],
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(Array.isArray(obs.tool_definitions)).toBe(true);
+    const defs = obs.tool_definitions as Array<Record<string, unknown>>;
+    expect(defs).toHaveLength(2);
+    expect(defs[0].name).toBe("addResource");
+    expect(defs[0].type).toBe("function");
+    expect(defs[1].name).toBe("getInformation");
+  });
+
+  it("keeps unparseable ai.prompt.tools entries verbatim", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText.doStream",
+              "ai.prompt.tools": ["not json", '{"name":"ok"}'],
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    const defs = obs.tool_definitions as unknown[];
+    expect(defs).toEqual(["not json", { name: "ok" }]);
   });
 
   it("doGenerate with tool-use output captures ai.response.toolCalls as output", () => {
@@ -697,10 +1007,10 @@ describe("Vercel AI SDK", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe(
+    expect(obs.input_messages_raw).toBe(
       '[{"role":"user","content":[{"type":"text","text":"What is 47 + 38?"}]}]',
     );
-    expect(obs.output).toBe(
+    expect(obs.output_messages_raw).toBe(
       '[{"toolCallId":"toolu_1","toolName":"add","input":"{\\"a\\":47,\\"b\\":38}"}]',
     );
   });
@@ -723,8 +1033,8 @@ describe("Vercel AI SDK", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe('[{"role":"user","content":"hi"}]');
-    expect(obs.output).toBe("hello");
+    expect(obs.input_messages_raw).toBe('[{"role":"user","content":"hi"}]');
+    expect(obs.output_messages_raw).toBe("hello");
   });
 
   it("doGenerate spans fall through to GENERATION via gen_ai.* (otelGenai adapter)", () => {

@@ -8,7 +8,8 @@ import {
   isGenAISpan,
   isKnownLLMInstrumentor,
   isKubitSpan,
-} from "./spanFilter";
+  isLangGraphInternalSpan,
+} from "../src/spanFilter";
 
 function makeSpan(opts: {
   scopeName?: string | null;
@@ -109,6 +110,63 @@ describe("isDefaultExportSpan", () => {
       ),
     ).toBe(false);
   });
+  it("false for LangGraph ChannelWrite span even on a known scope", () => {
+    expect(
+      isDefaultExportSpan(
+        makeSpan({
+          scopeName: "langfuse-sdk",
+          name: "ChannelWrite<__start__:agent>",
+        }),
+      ),
+    ).toBe(false);
+  });
+  it("false for LangGraph __start__ pseudo-node even on a known scope", () => {
+    expect(
+      isDefaultExportSpan(makeSpan({ scopeName: "langfuse-sdk", name: "__start__" })),
+    ).toBe(false);
+  });
+  it("LangGraph filter overrides gen_ai attribute presence", () => {
+    expect(
+      isDefaultExportSpan(
+        makeSpan({
+          name: "ChannelWrite<...,agent>",
+          scopeName: "langfuse-sdk",
+          attrs: { "gen_ai.request.model": "gpt-4" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("isLangGraphInternalSpan", () => {
+  it("matches ChannelWrite prefix", () => {
+    expect(isLangGraphInternalSpan(makeSpan({ name: "ChannelWrite<...>" }))).toBe(
+      true,
+    );
+    expect(
+      isLangGraphInternalSpan(makeSpan({ name: "ChannelWrite<__start__:agent>" })),
+    ).toBe(true);
+    expect(
+      isLangGraphInternalSpan(makeSpan({ name: "ChannelWrite<...,tools>" })),
+    ).toBe(true);
+  });
+  it("matches __start__ and __end__ pseudo-nodes", () => {
+    expect(isLangGraphInternalSpan(makeSpan({ name: "__start__" }))).toBe(true);
+    expect(isLangGraphInternalSpan(makeSpan({ name: "__end__" }))).toBe(true);
+  });
+  it("does NOT match meaningful node names", () => {
+    expect(isLangGraphInternalSpan(makeSpan({ name: "agent" }))).toBe(false);
+    expect(isLangGraphInternalSpan(makeSpan({ name: "tools" }))).toBe(false);
+    expect(isLangGraphInternalSpan(makeSpan({ name: "RunnableSequence" }))).toBe(
+      false,
+    );
+    expect(isLangGraphInternalSpan(makeSpan({ name: "ChatOpenAI" }))).toBe(false);
+    expect(
+      isLangGraphInternalSpan(
+        makeSpan({ name: "Branch<agent,continue,__end__>" }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("known prefixes includes kubit", () => {
@@ -122,7 +180,7 @@ describe("known prefixes includes kubit", () => {
 describe("KubitSpanProcessor filtering", () => {
   async function loadProcessor() {
     vi.resetModules();
-    vi.doMock("./exporter", () => ({
+    vi.doMock("../src/exporter", () => ({
       KubitExporter: class {
         export() {}
         shutdown() {
@@ -133,7 +191,7 @@ describe("KubitSpanProcessor filtering", () => {
         }
       },
     }));
-    return (await import("./processor")).KubitSpanProcessor;
+    return (await import("../src/processor")).KubitSpanProcessor;
   }
 
   // Stub the BatchSpanProcessor's onEnd on the grandparent prototype so we can
