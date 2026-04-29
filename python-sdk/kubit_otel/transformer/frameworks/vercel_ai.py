@@ -131,7 +131,14 @@ def resolve_observation_type(span_attrs: dict) -> str | None:
         return "AGENT"
     if op in ("ai.generateObject", "ai.streamObject"):
         return "AGENT"
+    # Both the outer (``ai.embed`` / ``ai.embedMany``) and the inner provider
+    # call (``ai.embed.doEmbed`` / ``ai.embedMany.doEmbed``) classify as
+    # EMBEDDINGS — they carry only ``ai.*`` attrs (no ``gen_ai.*``), so
+    # without an explicit match the inner spans would fall through to core's
+    # ``model present ⇒ GENERATION`` rule.
     if op in ("ai.embed", "ai.embedMany"):
+        return "EMBEDDINGS"
+    if op in ("ai.embed.doEmbed", "ai.embedMany.doEmbed"):
         return "EMBEDDINGS"
     # `.doGenerate` / `.doStream` fall through to otel_genai's `gen_ai.*` handling.
     return None
@@ -161,6 +168,28 @@ def build_params(span_attrs: dict, merged: dict[str, Any]) -> None:
             continue
         if canonical_key not in merged:
             merged[canonical_key] = val
+
+
+def aggregate_tool_definitions(span_attrs: dict) -> Optional[list]:
+    """Parse ``ai.prompt.tools`` into a list of tool definitions.
+
+    Vercel emits ``ai.prompt.tools`` on ``*.doGenerate`` / ``*.doStream``
+    spans as a string-array (each entry is a JSON-encoded tool-definition
+    object — ``{type, name, description, inputSchema, ...}``). OTel attribute
+    typing forbids nested objects, so the array-of-strings form is the wire
+    encoding. Parse each entry; keep raw on parse failure.
+    """
+    raw = span_attrs.get("ai.prompt.tools")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return None
+    out: list = []
+    for entry in raw:
+        if isinstance(entry, str):
+            parsed = safe_json_parse(entry)
+            out.append(parsed if parsed is not None else entry)
+        else:
+            out.append(entry)
+    return out or None
 
 
 def normalize_messages(span_attrs: dict) -> Optional[dict]:

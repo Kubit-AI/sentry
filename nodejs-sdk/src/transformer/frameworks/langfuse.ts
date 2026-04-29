@@ -133,7 +133,7 @@ export const adapter = makeAdapter({
     // `{role:"tool", content:{name, input_schema, description}}` entry inside
     // `langfuse.observation.input`. They aren't chat messages — surface them
     // here so they land in the top-level `tool_definitions` field while the
-    // normalizer drops them from `input_messages`.
+    // normalizer drops them from the canonical `input` array.
     const raw = attrs["langfuse.observation.input"];
     if (raw === undefined || raw === null) return null;
     const parsed = typeof raw === "string" ? safeJsonParse(raw) : raw;
@@ -262,9 +262,9 @@ function isToolDefinitionMessage(m: unknown): boolean {
 
 /**
  * For `langfuse.observation.type == "tool"` spans, synthesize canonical
- * `input_messages` (assistant `tool_call` request) and `output_messages`
- * (tool `tool_call_response` reply) so they faithfully represent a tool
- * invocation instead of the default `role:"user"` text-wrap of raw args.
+ * `input` (assistant `tool_call` request) and `output` (tool
+ * `tool_call_response` reply) so they faithfully represent a tool invocation
+ * instead of the default `role:"user"` text-wrap of raw args.
  *
  * Strategy:
  * 1. Parse the output blob and run `langchainEnvelopeToCanonical` on it.

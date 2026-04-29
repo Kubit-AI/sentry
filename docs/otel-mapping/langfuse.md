@@ -62,7 +62,7 @@ The adapter rewrites any non-canonical string role to `role:"tool"`, lifting the
 
 ### Tool definitions
 
-The PY callback injects each tool definition as a phantom `{role:"tool", content:{name, input_schema, description}}` entry inside `langfuse.observation.input`, sitting alongside the actual user/system messages. These aren't chat turns — the adapter strips them from `input_messages` and surfaces them via the top-level `tool_definitions` field instead.
+The PY callback injects each tool definition as a phantom `{role:"tool", content:{name, input_schema, description}}` entry inside `langfuse.observation.input`, sitting alongside the actual user/system messages. These aren't chat turns — the adapter strips them from the canonical `input` array and surfaces them via the top-level `tool_definitions` field instead.
 
 The JS callback **does not emit tool definitions at all** — they're absent from every attribute on every span. This is an upstream gap (`langfuse-js` doesn't carry them through), not a transformer fix.
 
@@ -81,8 +81,8 @@ The PY langfuse adapter's TOOL-span synthesizer (see below) parses args via `saf
 
 A bare `langfuse.observation.type = "tool"` span carries the tool args as `langfuse.observation.input` and the tool result as `langfuse.observation.output` — neither is shaped like a chat turn. The default `blobToMessages` flow would text-wrap the args as a fake `role:"user"` message. The adapter detects TOOL spans and synthesizes a canonical request/response pair instead:
 
-- `input_messages` → `[{role:"assistant", parts:[{type:"tool_call", name, arguments, id}]}]`
-- `output_messages` → `[{role:"tool", name, parts:[{type:"tool_call_response", response, id}]}]`
+- `input` → `[{role:"assistant", parts:[{type:"tool_call", name, arguments, id}]}]`
+- `output` → `[{role:"tool", name, parts:[{type:"tool_call_response", response, id}]}]`
 
 Tool name and `tool_call_id` are lifted from the normalized output's `tool_call_response.id`, so the synthesized input shares the same id the parent generation emitted. When the output envelope can't be normalized (e.g. raw-string output), input synthesis is skipped (no recoverable name) and output gets a fallback wrap with no id linkage. This mirrors the openinference adapter's `synthesizeToolSpanMessages` pattern.
 

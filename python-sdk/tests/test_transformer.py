@@ -159,8 +159,8 @@ class TestLangfuseV4SpanType:
         assert obs["model"] is None
         assert obs["usage_details"] == {}
         assert obs["cost_details"] == {}
-        assert obs["input"] == json.dumps({"x": 1})
-        assert obs["output"] == json.dumps({"y": 2})
+        assert obs["input_messages_raw"] == json.dumps({"x": 1})
+        assert obs["output_messages_raw"] == json.dumps({"y": 2})
 
     def test_type_tool_maps_to_tool(self):
         span = _mock_span(
@@ -251,7 +251,7 @@ class TestLangfuseProviderModelAliases:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["output_messages"] == [
+        assert obs["output"] == [
             {
                 "role": "tool",
                 "name": "add",
@@ -501,7 +501,7 @@ class TestGenAiSpanEvents:
             ],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        inp = json.loads(obs["input"])
+        inp = json.loads(obs["input_messages_raw"])
         assert inp == [
             {"role": "system", "content": "be helpful"},
             {"role": "user", "content": "hello"},
@@ -518,7 +518,7 @@ class TestGenAiSpanEvents:
             ],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        out = json.loads(obs["output"])
+        out = json.loads(obs["output_messages_raw"])
         assert out == [{"index": 0, "finish_reason": "stop", "message": "hi"}]
 
     def test_attribute_input_beats_event_input(self):
@@ -528,7 +528,7 @@ class TestGenAiSpanEvents:
             events=[self._event("gen_ai.user.message", {"content": "event-form"})],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == "attr-form"
+        assert obs["input_messages_raw"] == "attr-form"
 
     def test_event_role_overrides_event_name_fallback(self):
         # Explicit role in event attrs wins over the name-derived default.
@@ -538,7 +538,7 @@ class TestGenAiSpanEvents:
             ],
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"])[0]["role"] == "developer"
+        assert json.loads(obs["input_messages_raw"])[0]["role"] == "developer"
 
 
 class TestLangfuseTraceNameOverride:
@@ -586,8 +586,8 @@ class TestVercelAiSdk:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "AGENT"
         assert obs["agent_name"] == "calcbot.turn"
-        assert obs["input"] == '{"prompt":"What is 47 + 38?"}'
-        assert obs["output"] == "The result of 47 + 38 is 85."
+        assert obs["input_messages_raw"] == '{"prompt":"What is 47 + 38?"}'
+        assert obs["output_messages_raw"] == "The result of 47 + 38 is 85."
         assert obs["provider"] == "anthropic"
         usage = obs["usage_details"]
         assert usage["input"] == 704
@@ -608,8 +608,8 @@ class TestVercelAiSdk:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "TOOL"
         assert obs["tool_name"] == "add"
-        assert obs["input"] == '{"a":47,"b":38}'
-        assert obs["output"] == "85"
+        assert obs["input_messages_raw"] == '{"a":47,"b":38}'
+        assert obs["output_messages_raw"] == "85"
 
     def test_stream_text_maps_to_agent(self):
         span = _mock_span(
@@ -635,6 +635,73 @@ class TestVercelAiSdk:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "EMBEDDINGS"
 
+    def test_embed_do_embed_maps_to_embeddings_with_model(self):
+        # Inner provider-call spans carry `ai.model.id` — without an explicit
+        # EMBEDDINGS match they would fall through to core's
+        # "model present ⇒ GENERATION" rule.
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.embed.doEmbed",
+                "ai.model.id": "text-embedding-ada-002",
+                "ai.model.provider": "openai.embeddings",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
+        assert obs["model"] == "text-embedding-ada-002"
+
+    def test_embed_many_do_embed_maps_to_embeddings_with_model(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.embedMany.doEmbed",
+                "ai.model.id": "text-embedding-ada-002",
+                "ai.model.provider": "openai.embeddings",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "EMBEDDINGS"
+        assert obs["model"] == "text-embedding-ada-002"
+
+    def test_aggregates_ai_prompt_tools_into_tool_definitions(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText.doStream",
+                "ai.prompt.tools": [
+                    '{"type":"function","name":"addResource",'
+                    '"description":"add a resource",'
+                    '"inputSchema":{"type":"object",'
+                    '"properties":{"content":{"type":"string"}},'
+                    '"required":["content"]}}',
+                    '{"type":"function","name":"getInformation",'
+                    '"description":"look up",'
+                    '"inputSchema":{"type":"object",'
+                    '"properties":{"q":{"type":"string"}},'
+                    '"required":["q"]}}',
+                ],
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        defs = obs["tool_definitions"]
+        assert isinstance(defs, list)
+        assert len(defs) == 2
+        assert defs[0]["name"] == "addResource"
+        assert defs[0]["type"] == "function"
+        assert defs[1]["name"] == "getInformation"
+
+    def test_keeps_unparseable_ai_prompt_tools_entries_verbatim(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText.doStream",
+                "ai.prompt.tools": ["not json", '{"name":"ok"}'],
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["tool_definitions"] == ["not json", {"name": "ok"}]
+
     def test_do_generate_with_tool_calls_output(self):
         span = _mock_span(
             scope_name="ai",
@@ -652,11 +719,11 @@ class TestVercelAiSdk:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == (
+        assert obs["input_messages_raw"] == (
             '[{"role":"user","content":'
             '[{"type":"text","text":"What is 47 + 38?"}]}]'
         )
-        assert obs["output"] == (
+        assert obs["output_messages_raw"] == (
             '[{"toolCallId":"toolu_1","toolName":"add",'
             '"input":"{\\"a\\":47,\\"b\\":38}"}]'
         )
@@ -672,8 +739,8 @@ class TestVercelAiSdk:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == '[{"role":"user","content":"hi"}]'
-        assert obs["output"] == "hello"
+        assert obs["input_messages_raw"] == '[{"role":"user","content":"hi"}]'
+        assert obs["output_messages_raw"] == "hello"
 
     def test_do_generate_falls_through_to_otel_genai(self):
         span = _mock_span(

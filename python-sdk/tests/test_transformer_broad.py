@@ -117,8 +117,8 @@ class TestOpenAIAgentsSchema:
     def test_input_and_output_captured_from_modern_keys(self):
         span = _mock_span(attributes=self._attrs())
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"])[0]["content"] == "hello"
-        assert json.loads(obs["output"])[0]["content"] == "hi"
+        assert json.loads(obs["input_messages_raw"])[0]["content"] == "hello"
+        assert json.loads(obs["output_messages_raw"])[0]["content"] == "hi"
 
     def test_model_parameters_packed_from_flat_keys(self):
         span = _mock_span(attributes=self._attrs())
@@ -272,8 +272,8 @@ class TestOpenInferenceSchema:
     def test_input_value_captured_when_messages_absent(self):
         span = _mock_span(attributes=self._attrs())
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == "what's the weather"
-        assert obs["output"] == "sunny"
+        assert obs["input_messages_raw"] == "what's the weather"
+        assert obs["output_messages_raw"] == "sunny"
 
 
 class TestLangSmithSchema:
@@ -331,7 +331,7 @@ class TestLangSmithSchema:
         # No gen_ai.input.messages — fall back to gen_ai.prompt.
         span = _mock_span(attributes=self._attrs())
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"])[0]["content"] == "q"
+        assert json.loads(obs["input_messages_raw"])[0]["content"] == "q"
 
 
 class TestLogfireLatestSchema:
@@ -351,7 +351,7 @@ class TestLogfireLatestSchema:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["tags"] == ("prod", "web")
         assert obs["type"] == "GENERATION"
-        assert json.loads(obs["input"])[0]["content"] == "x"
+        assert json.loads(obs["input_messages_raw"])[0]["content"] == "x"
 
 
 class TestTraceloopModernSchema:
@@ -458,12 +458,12 @@ class TestIndexedMessageUnpacking:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        parsed_in = json.loads(obs["input"])
+        parsed_in = json.loads(obs["input_messages_raw"])
         assert parsed_in == [
             {"role": "system", "content": "you are helpful"},
             {"role": "user", "content": "hi"},
         ]
-        parsed_out = json.loads(obs["output"])
+        parsed_out = json.loads(obs["output_messages_raw"])
         assert parsed_out == [{"role": "assistant", "content": "hello"}]
 
     def test_traceloop_indexed_gen_ai_prompts(self):
@@ -478,8 +478,8 @@ class TestIndexedMessageUnpacking:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"]) == [{"role": "user", "content": "hey"}]
-        assert json.loads(obs["output"]) == [
+        assert json.loads(obs["input_messages_raw"]) == [{"role": "user", "content": "hey"}]
+        assert json.loads(obs["output_messages_raw"]) == [
             {"role": "assistant", "content": "sup"}
         ]
 
@@ -494,7 +494,7 @@ class TestIndexedMessageUnpacking:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"])[0]["content"] == "flat"
+        assert json.loads(obs["input_messages_raw"])[0]["content"] == "flat"
 
 
 class TestProviderExtractionDisabled:
@@ -558,8 +558,8 @@ class TestBraintrustNativePayloads:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"])["messages"][0]["role"] == "user"
-        assert json.loads(obs["output"])["content"] == "ok"
+        assert json.loads(obs["input_messages_raw"])["messages"][0]["role"] == "user"
+        assert json.loads(obs["output_messages_raw"])["content"] == "ok"
 
     def test_gen_ai_prompt_json_fallback(self):
         span = _mock_span(
@@ -569,8 +569,8 @@ class TestBraintrustNativePayloads:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"])[0]["role"] == "user"
-        assert json.loads(obs["output"])[0]["role"] == "assistant"
+        assert json.loads(obs["input_messages_raw"])[0]["role"] == "user"
+        assert json.loads(obs["output_messages_raw"])[0]["role"] == "assistant"
 
     def test_braintrust_metrics_promoted_to_usage(self):
         span = _mock_span(
@@ -642,8 +642,8 @@ class TestTraceloopEntityPayloads:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input"] == json.dumps({"query": "hello"})
-        assert obs["output"] == json.dumps({"answer": "hi"})
+        assert obs["input_messages_raw"] == json.dumps({"query": "hello"})
+        assert obs["output_messages_raw"] == json.dumps({"answer": "hi"})
 
 
 class TestOpenInferenceRetrievalDocs:
@@ -665,7 +665,7 @@ class TestOpenInferenceRetrievalDocs:
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["type"] == "RETRIEVER"
-        docs = json.loads(obs["output"])
+        docs = json.loads(obs["output_messages_raw"])
         assert docs == [
             {"content": "Paris is the capital of France.", "id": "doc-1", "score": 0.97},
             {"content": "The Eiffel Tower is in Paris.", "id": "doc-2", "score": 0.91},
@@ -680,7 +680,7 @@ class TestOpenInferenceRetrievalDocs:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        parsed = json.loads(obs["output"])
+        parsed = json.loads(obs["output_messages_raw"])
         assert parsed == [{"role": "assistant", "content": "from messages"}]
 
     def test_retrieval_docs_populate_both_legacy_and_canonical_outputs(self):
@@ -699,11 +699,11 @@ class TestOpenInferenceRetrievalDocs:
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         # Legacy path (unpack_messages)
+        assert obs["output_messages_raw"]
+        assert "Paris is the capital of France." in json.dumps(obs["output_messages_raw"])
+        # Canonical path (normalize_messages)
         assert obs["output"]
         assert "Paris is the capital of France." in json.dumps(obs["output"])
-        # Canonical path (normalize_messages)
-        assert obs["output_messages"]
-        assert "Paris is the capital of France." in json.dumps(obs["output_messages"])
 
 
 def _lc_msg(type_: str, kwargs: dict) -> dict:
@@ -740,11 +740,11 @@ class TestOpenInferenceLangChain:
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["tool_name"] == "add"
-        assert obs["input_messages"] == [{
+        assert obs["input"] == [{
             "role": "assistant",
             "parts": [{"type": "tool_call", "name": "add", "arguments": {"a": 47, "b": 38}}],
         }]
-        assert obs["output_messages"] == [{
+        assert obs["output"] == [{
             "role": "tool",
             "parts": [{"type": "tool_call_response", "response": "85", "id": "toolu_xyz"}],
             "name": "add",
@@ -765,7 +765,7 @@ class TestOpenInferenceLangChain:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["output_messages"] == [{
+        assert obs["output"] == [{
             "role": "tool",
             "parts": [{"type": "tool_call_response", "response": "result", "id": "tc_1"}],
         }]
@@ -780,12 +780,12 @@ class TestOpenInferenceLangChain:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["input_messages"] == [{
+        assert obs["input"] == [{
             "role": "assistant",
             "parts": [{"type": "tool_call", "name": "add", "arguments": {"a": 1}}],
         }]
         # Raw scalar "85" survives the JSON parse round-trip (becomes 85).
-        assert obs["output_messages"] == [{
+        assert obs["output"] == [{
             "role": "tool",
             "parts": [{"type": "tool_call_response", "response": 85}],
         }]
@@ -805,7 +805,7 @@ class TestOpenInferenceLangChain:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert obs["output_messages"] == [{
+        assert obs["output"] == [{
             "role": "assistant",
             "parts": [{"type": "tool_call", "name": "add", "id": "tu_1", "arguments": {"a": 1}}],
         }]
@@ -854,11 +854,11 @@ class TestBraintrustIndexedAndMetadata:
             },
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
-        assert json.loads(obs["input"]) == [
+        assert json.loads(obs["input_messages_raw"]) == [
             {"role": "user", "content": "what's the capital of France?"},
             {"role": "assistant", "content": "Paris."},
         ]
-        assert json.loads(obs["output"]) == [{"role": "assistant", "content": "Paris."}]
+        assert json.loads(obs["output_messages_raw"]) == [{"role": "assistant", "content": "Paris."}]
 
     def test_metadata_prefix_promoted(self):
         span = _mock_span(

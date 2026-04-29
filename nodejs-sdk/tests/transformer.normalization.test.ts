@@ -83,10 +83,10 @@ describe("otelGenai normalizer", () => {
       },
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "hello" }] },
     ]);
   });
@@ -96,10 +96,10 @@ describe("otelGenai normalizer", () => {
       attrs: { "gen_ai.prompt": "hi", "gen_ai.completion": "there" },
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "there" }] },
     ]);
   });
@@ -114,7 +114,7 @@ describe("otelGenai normalizer", () => {
       },
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -162,7 +162,7 @@ describe("otelGenai normalizer", () => {
       },
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -188,11 +188,11 @@ describe("openinference normalizer", () => {
         '{"q":"x"}',
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "system", parts: [{ type: "text", content: "Be helpful." }] },
       { role: "user", parts: [{ type: "text", content: "Hi!" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -211,7 +211,7 @@ describe("openinference normalizer", () => {
       "retrieval.documents.0.document.score": 0.9,
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "tool",
         parts: [
@@ -245,7 +245,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "What is 2+2?" }] },
     ]);
   });
@@ -260,7 +260,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       ),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [{ type: "tool_call", name: "add", id: "toolu_1", arguments: { a: 1, b: 2 } }],
@@ -279,7 +279,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       ),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -301,7 +301,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       ),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    const parts = asMessages(r.output_messages)[0].parts;
+    const parts = asMessages(r.output)[0].parts;
     expect(parts).toEqual([
       { type: "tool_call", name: "add", id: "toolu_3", arguments: { a: 1 } },
     ]);
@@ -315,7 +315,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       {
         role: "tool",
         parts: [{ type: "tool_call_response", response: "85", id: "toolu_4" }],
@@ -332,7 +332,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "system", parts: [{ type: "text", content: "Be terse." }] },
     ]);
   });
@@ -353,7 +353,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    const msgs = asMessages(r.input_messages);
+    const msgs = asMessages(r.input);
     expect(msgs).toHaveLength(4);
     expect(msgs[0].role).toBe("user");
     expect(msgs[1].role).toBe("assistant");
@@ -381,7 +381,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
       { role: "assistant", parts: [{ type: "text", content: "hello" }] },
     ]);
@@ -411,7 +411,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -441,7 +441,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
       {
         role: "assistant",
@@ -484,7 +484,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
       { role: "assistant", parts: [
           { type: "tool_call", name: "add", id: "toolu_x", arguments: { a: 47, b: 38 } },
@@ -519,7 +519,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -554,7 +554,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [
           { type: "text", content: "Thank you for your request." },
         ] },
@@ -574,7 +574,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toBeNull();
+    expect(r.output).toBeNull();
   });
 
   // Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing
@@ -592,7 +592,7 @@ describe("openinference normalizer (LangChain envelope)", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toBeNull();
+    expect(r.output).toBeNull();
   });
 });
 
@@ -605,10 +605,10 @@ describe("traceloop normalizer", () => {
       "gen_ai.completion.0.content": "hello",
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "hello" }] },
     ]);
   });
@@ -633,8 +633,8 @@ describe("traceloop normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toBeNull();
-    expect(r.output_messages).toBeNull();
+    expect(r.input).toBeNull();
+    expect(r.output).toBeNull();
   });
 
   // When the entity blob does carry a real `messages` array (LangGraph
@@ -649,7 +649,7 @@ describe("traceloop normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
     ]);
   });
@@ -670,7 +670,7 @@ describe("traceloop normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "47 + 38 = 85" }] },
     ]);
   });
@@ -687,10 +687,10 @@ describe("braintrust normalizer", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "hello" }] },
     ]);
   });
@@ -712,7 +712,7 @@ describe("vercelAi normalizer", () => {
       "ai.response.text": "A cat.",
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       {
         role: "user",
         parts: [
@@ -721,7 +721,7 @@ describe("vercelAi normalizer", () => {
         ],
       },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "A cat." }] },
     ]);
   });
@@ -739,7 +739,7 @@ describe("vercelAi normalizer", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(asMessages(r.input_messages)[0].parts[0]).toEqual({
+    expect(asMessages(r.input)[0].parts[0]).toEqual({
       type: "blob",
       modality: "image",
       content: "AAAA",
@@ -755,7 +755,7 @@ describe("vercelAi normalizer", () => {
       "ai.toolCall.result": { temp: 22 },
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       {
         role: "assistant",
         parts: [
@@ -767,7 +767,7 @@ describe("vercelAi normalizer", () => {
         ],
       },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "tool",
         parts: [{ type: "tool_call_response", response: { temp: 22 } }],
@@ -800,11 +800,11 @@ describe("logfire normalizer (Pydantic AI envelope)", () => {
       },
     ]);
     const r = obs(transformSpans([makeSpan({ attrs: { "pydantic_ai.all_messages": envelope } })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "system", parts: [{ type: "text", content: "Be concise" }] },
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -828,10 +828,10 @@ describe("langfuse normalizer", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -875,7 +875,7 @@ describe("langfuse normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [
@@ -922,7 +922,7 @@ describe("langfuse normalizer", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
     ]);
     expect(r.tool_definitions).toEqual([toolDef]);
@@ -962,7 +962,7 @@ describe("langfuse normalizer", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    const msgs = asMessages(r.input_messages);
+    const msgs = asMessages(r.input);
     expect(msgs).toHaveLength(4);
     expect(msgs[0]).toEqual({
       role: "user",
@@ -1004,7 +1004,7 @@ describe("langfuse normalizer", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       {
         role: "developer",
         parts: [{ type: "text", content: "Always respond as strict JSON." }],
@@ -1034,7 +1034,7 @@ describe("langfuse normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "tool",
         name: "add",
@@ -1086,7 +1086,7 @@ describe("langfuse normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(asMessages(r.output_messages)).toEqual([
+    expect(asMessages(r.output)).toEqual([
       { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
       {
         role: "assistant",
@@ -1119,7 +1119,7 @@ describe("langfuse normalizer", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "tool",
         name: "add",
@@ -1147,7 +1147,7 @@ describe("langfuse normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       {
         role: "assistant",
         parts: [
@@ -1160,7 +1160,7 @@ describe("langfuse normalizer", () => {
         ],
       },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "tool",
         name: "add",
@@ -1195,7 +1195,7 @@ describe("langfuse normalizer", () => {
       }),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       {
         role: "assistant",
         parts: [
@@ -1208,7 +1208,7 @@ describe("langfuse normalizer", () => {
         ],
       },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "tool",
         name: "add",
@@ -1234,13 +1234,13 @@ describe("langfuse normalizer", () => {
       "langfuse.observation.output": JSON.stringify("85"),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       {
         role: "user",
         parts: [{ type: "text", content: '{"x":1}' }],
       },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "tool",
         parts: [{ type: "tool_call_response", response: "85" }],
@@ -1266,10 +1266,10 @@ describe("span-event fallback", () => {
       ],
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [{ type: "text", content: "hello" }],
@@ -1299,14 +1299,14 @@ describe("span-event fallback", () => {
       ],
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "what's the weather?" }] },
       {
         role: "tool",
         parts: [{ type: "tool_call_response", response: "72F", id: "call_42" }],
       },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       {
         role: "assistant",
         parts: [{ type: "text", content: "It's 72F" }],
@@ -1330,10 +1330,10 @@ describe("cross-adapter resolution", () => {
       ]),
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
-    expect(r.input_messages).toEqual([
+    expect(r.input).toEqual([
       { role: "user", parts: [{ type: "text", content: "hi" }] },
     ]);
-    expect(r.output_messages).toEqual([
+    expect(r.output).toEqual([
       { role: "assistant", parts: [{ type: "text", content: "hello" }] },
     ]);
   });
@@ -1352,11 +1352,11 @@ describe("system_instructions injection", () => {
       },
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(asMessages(r.input_messages)[0]).toEqual({
+    expect(asMessages(r.input)[0]).toEqual({
       role: "system",
       parts: [{ type: "text", content: "Be helpful" }],
     });
-    expect(asMessages(r.input_messages)[1].role).toBe("user");
+    expect(asMessages(r.input)[1].role).toBe("user");
   });
 
   it("does not double-inject when input already starts with a system message", () => {
@@ -1370,11 +1370,11 @@ describe("system_instructions injection", () => {
       },
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(asMessages(r.input_messages)[0].parts[0]).toEqual({
+    expect(asMessages(r.input)[0].parts[0]).toEqual({
       type: "text",
       content: "Be terse",
     });
-    expect(r.input_messages).toHaveLength(2);
+    expect(r.input).toHaveLength(2);
   });
 
   it("text-wraps non-string non-object items in array form", () => {
@@ -1390,7 +1390,7 @@ describe("system_instructions injection", () => {
       },
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(asMessages(r.input_messages)[0]).toEqual({
+    expect(asMessages(r.input)[0]).toEqual({
       role: "system",
       parts: [
         { type: "text", content: "42" },
@@ -1408,7 +1408,7 @@ describe("non-LLM spans", () => {
       kind: SpanKind.CLIENT,
     });
     const r = obs(transformSpans([span], "w", "c"));
-    expect(r.input_messages).toBeNull();
-    expect(r.output_messages).toBeNull();
+    expect(r.input).toBeNull();
+    expect(r.output).toBeNull();
   });
 });

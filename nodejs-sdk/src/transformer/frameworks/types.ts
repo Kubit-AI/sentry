@@ -157,9 +157,9 @@ export interface FrameworkAdapter {
    * `null` is also valid (recognized the namespace, nothing to extract).
    *
    * Distinct from `unpackMessages`: that hook returns a JSON string used by
-   * the legacy `input`/`output` fields. `normalizeMessages` powers the new
-   * `input_messages`/`output_messages` canonical fields and shares no
-   * machinery with the legacy path.
+   * the raw `input_messages_raw`/`output_messages_raw` fields.
+   * `normalizeMessages` powers the canonical `input`/`output` fields and
+   * shares no machinery with the raw path.
    */
   normalizeMessages?(attrs: Record<string, unknown>): CanonicalMessages | null;
   enrichMetadata?(attrs: Record<string, unknown>, metadata: Record<string, unknown>): void;

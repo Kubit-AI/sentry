@@ -73,20 +73,20 @@ class TestOtelGenaiNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
         ]
 
     def test_legacy_prompt_completion(self):
         span = _mock_span(attrs={"gen_ai.prompt": "hi", "gen_ai.completion": "there"})
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "there"}]}
         ]
 
@@ -98,7 +98,7 @@ class TestOtelGenaiNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "text", "content": "one moment"},
@@ -134,7 +134,7 @@ class TestOtelGenaiNormalizer:
             }]),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "tool_call", "id": "toolu_X", "name": "add", "arguments": {"a": 1, "b": 2}},
@@ -159,11 +159,11 @@ class TestOpeninferenceNormalizer:
             "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": '{"q":"x"}',
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "system", "parts": [{"type": "text", "content": "Be helpful."}]},
             {"role": "user", "parts": [{"type": "text", "content": "Hi!"}]},
         ]
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "text", "content": "Hello!"},
@@ -179,7 +179,7 @@ class TestOpeninferenceNormalizer:
             "retrieval.documents.0.document.score": 0.9,
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "tool",
             "parts": [{
                 "type": "retrieval_document",
@@ -213,7 +213,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "What is 2+2?"}]},
         ]
 
@@ -229,7 +229,7 @@ class TestOpeninferenceLangchainEnvelope:
             ),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [{"type": "tool_call", "name": "add", "id": "toolu_1", "arguments": {"a": 1, "b": 2}}],
         }]
@@ -245,7 +245,7 @@ class TestOpeninferenceLangchainEnvelope:
             ),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "text", "content": "calling add"},
@@ -264,7 +264,7 @@ class TestOpeninferenceLangchainEnvelope:
             ),
         })
         r = _obs(_transform(span))
-        parts = r["output_messages"][0]["parts"]
+        parts = r["output"][0]["parts"]
         assert parts == [
             {"type": "tool_call", "name": "add", "id": "toolu_3", "arguments": {"a": 1}},
         ]
@@ -277,7 +277,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [{
+        assert r["input"] == [{
             "role": "tool",
             "parts": [{"type": "tool_call_response", "response": "85", "id": "toolu_4"}],
             "name": "add",
@@ -291,7 +291,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "system", "parts": [{"type": "text", "content": "Be terse."}]},
         ]
 
@@ -311,7 +311,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        msgs = r["input_messages"]
+        msgs = r["input"]
         assert len(msgs) == 4
         assert msgs[0]["role"] == "user"
         assert msgs[1]["role"] == "assistant"
@@ -336,7 +336,7 @@ class TestOpeninferenceLangchainEnvelope:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]},
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]},
         ]
@@ -366,7 +366,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "tool_call", "id": "toolu_X", "name": "add",
@@ -398,7 +398,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
             {
                 "role": "assistant",
@@ -441,7 +441,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
             {"role": "assistant", "parts": [
                 {"type": "tool_call", "name": "add", "id": "toolu_x", "arguments": {"a": 47, "b": 38}},
@@ -475,7 +475,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "tool_call", "name": "ConductResearch", "id": "call_w",
@@ -507,7 +507,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [
                 {"type": "text", "content": "Thank you for your request."},
             ]},
@@ -526,7 +526,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] is None
+        assert r["output"] is None
 
     # Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing
     # ``{output:[{lg_name:"Send",...}]}``) used to be text-wrapped into a fake
@@ -543,7 +543,7 @@ class TestOpeninferenceLangchainEnvelope:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] is None
+        assert r["output"] is None
 
 
 # ── traceloop ──────────────────────────────────────────────────────────────
@@ -558,10 +558,10 @@ class TestTraceloopNormalizer:
             "gen_ai.completion.0.content": "hello",
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
         ]
 
@@ -585,8 +585,8 @@ class TestTraceloopNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] is None
-        assert r["output_messages"] is None
+        assert r["input"] is None
+        assert r["output"] is None
 
     # When the entity blob does carry a real ``messages`` array (LangGraph
     # workflow input), unpack it via the LangChain envelope translator —
@@ -600,7 +600,7 @@ class TestTraceloopNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
         ]
 
@@ -619,7 +619,7 @@ class TestTraceloopNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "47 + 38 = 85"}]},
         ]
 
@@ -636,10 +636,10 @@ class TestBraintrustNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
         ]
 
@@ -661,14 +661,14 @@ class TestVercelAiNormalizer:
             "ai.response.text": "A cat.",
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [{
+        assert r["input"] == [{
             "role": "user",
             "parts": [
                 {"type": "text", "content": "What is this?"},
                 {"type": "uri", "modality": "image", "uri": "https://x/y.png"},
             ],
         }]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "A cat."}]}
         ]
 
@@ -683,7 +683,7 @@ class TestVercelAiNormalizer:
             }]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"][0]["parts"][0] == {
+        assert r["input"][0]["parts"][0] == {
             "type": "blob",
             "modality": "image",
             "content": "AAAA",
@@ -698,13 +698,13 @@ class TestVercelAiNormalizer:
             "ai.toolCall.result": {"temp": 22},
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [{
+        assert r["input"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "tool_call", "name": "getWeather", "arguments": {"city": "Paris"}}
             ],
         }]
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "tool",
             "parts": [{"type": "tool_call_response", "response": {"temp": 22}}],
         }]
@@ -733,11 +733,11 @@ class TestLogfireNormalizer:
         ])
         span = _mock_span(attrs={"pydantic_ai.all_messages": envelope})
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "system", "parts": [{"type": "text", "content": "Be concise"}]},
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]},
         ]
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "text", "content": "ok"},
@@ -759,10 +759,10 @@ class TestLangfuseNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
         ]
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {"type": "text", "content": "ok"},
@@ -803,7 +803,7 @@ class TestLangfuseNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [
                 {
@@ -847,7 +847,7 @@ class TestLangfuseNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
         ]
         assert r["tool_definitions"] == [tool_def]
@@ -886,7 +886,7 @@ class TestLangfuseNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        msgs = r["input_messages"]
+        msgs = r["input"]
         assert len(msgs) == 4
         assert msgs[0] == {
             "role": "user",
@@ -927,7 +927,7 @@ class TestLangfuseNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {
                 "role": "developer",
                 "parts": [{"type": "text", "content": "Always respond as strict JSON."}],
@@ -957,7 +957,7 @@ class TestLangfuseNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {
                 "role": "tool",
                 "name": "add",
@@ -1009,7 +1009,7 @@ class TestLangfuseNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
             {
                 "role": "assistant",
@@ -1041,7 +1041,7 @@ class TestLangfuseNormalizer:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {
                 "role": "tool",
                 "name": "add",
@@ -1068,7 +1068,7 @@ class TestLangfuseNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {
                 "role": "assistant",
                 "parts": [
@@ -1081,7 +1081,7 @@ class TestLangfuseNormalizer:
                 ],
             },
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {
                 "role": "tool",
                 "name": "add",
@@ -1116,7 +1116,7 @@ class TestLangfuseNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {
                 "role": "assistant",
                 "parts": [
@@ -1129,7 +1129,7 @@ class TestLangfuseNormalizer:
                 ],
             },
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {
                 "role": "tool",
                 "name": "add",
@@ -1154,13 +1154,13 @@ class TestLangfuseNormalizer:
             "langfuse.observation.output": json.dumps("85"),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {
                 "role": "user",
                 "parts": [{"type": "text", "content": '{"x": 1}'}],
             },
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {
                 "role": "tool",
                 "parts": [{"type": "tool_call_response", "response": "85"}],
@@ -1184,7 +1184,7 @@ class TestLangfuseNormalizer:
             }),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {
                 "role": "assistant",
                 "parts": [
@@ -1197,7 +1197,7 @@ class TestLangfuseNormalizer:
                 ],
             },
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {
                 "role": "tool",
                 "name": "add",
@@ -1227,10 +1227,10 @@ class TestSpanEventFallback:
         ev_choice.timestamp = 1_700_000_000_000_000_001
         span = _mock_span(events=[ev_user, ev_choice])
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
         ]
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [{"type": "text", "content": "hello"}],
             "finish_reason": "stop",
@@ -1251,14 +1251,14 @@ class TestSpanEventFallback:
         ev_choice.timestamp = 1_700_000_000_000_000_002
         span = _mock_span(events=[ev_user, ev_tool, ev_choice])
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "what's the weather?"}]},
             {
                 "role": "tool",
                 "parts": [{"type": "tool_call_response", "response": "72F", "id": "call_42"}],
             },
         ]
-        assert r["output_messages"] == [{
+        assert r["output"] == [{
             "role": "assistant",
             "parts": [{"type": "text", "content": "It's 72F"}],
             "finish_reason": "stop",
@@ -1280,10 +1280,10 @@ class TestCrossAdapterResolution:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"] == [
+        assert r["input"] == [
             {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
         ]
-        assert r["output_messages"] == [
+        assert r["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
         ]
 
@@ -1300,11 +1300,11 @@ class TestSystemInstructionsInjection:
             "gen_ai.input.messages": json.dumps([{"role": "user", "content": "hi"}]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"][0] == {
+        assert r["input"][0] == {
             "role": "system",
             "parts": [{"type": "text", "content": "Be helpful"}],
         }
-        assert r["input_messages"][1]["role"] == "user"
+        assert r["input"][1]["role"] == "user"
 
     def test_no_double_inject_when_input_already_has_system(self):
         span = _mock_span(attrs={
@@ -1315,8 +1315,8 @@ class TestSystemInstructionsInjection:
             ]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"][0]["parts"][0] == {"type": "text", "content": "Be terse"}
-        assert len(r["input_messages"]) == 2
+        assert r["input"][0]["parts"][0] == {"type": "text", "content": "Be terse"}
+        assert len(r["input"]) == 2
 
     def test_text_wraps_non_string_non_object_items_in_array_form(self):
         # Out-of-spec input (the schema wants Parts), but cross-SDK parity
@@ -1327,7 +1327,7 @@ class TestSystemInstructionsInjection:
             "gen_ai.input.messages": json.dumps([{"role": "user", "content": "hi"}]),
         })
         r = _obs(_transform(span))
-        assert r["input_messages"][0] == {
+        assert r["input"][0] == {
             "role": "system",
             "parts": [
                 {"type": "text", "content": "42"},
@@ -1344,5 +1344,5 @@ class TestNonLLMSpans:
     def test_returns_null_when_no_recognizable_attrs(self):
         span = _mock_span(attrs={"http.method": "GET", "http.url": "https://x/y"})
         r = _obs(_transform(span))
-        assert r["input_messages"] is None
-        assert r["output_messages"] is None
+        assert r["input"] is None
+        assert r["output"] is None

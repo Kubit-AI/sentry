@@ -21,6 +21,7 @@ A critical integration point for Logfire exists within the JavaScript ecosystem,
 | `ai.usage.completionTokens` | `gen_ai.usage.output_tokens` | Translates generation token tracking for billing calculations. |
 | `ai.request.temperature` | `gen_ai.request.temperature` | Captures generation hyper-parameters. |
 | `ai.request.stopSequences` | `gen_ai.request.stop_sequences` | Captures constraints applied to the generation loop. |
+| `ai.prompt.tools` | `gen_ai.tool.definitions` | Vercel emits the available tool catalogue on `*.doStream` / `*.doGenerate` spans as a string-array of JSON-encoded definitions (`{type, name, description, inputSchema, ...}`). The kubit-otel `vercel_ai` adapter parses each entry and exposes the result as `tool_definitions` on the enriched observation. |
 | `logfire.tags` | (no OTel equivalent) | Logfire-native free-form tag list; the kubit-otel `logfire` adapter surfaces it as `tags` on the enriched observation. |
 
 Logfire ingests these translated `gen_ai.*` attributes to render distinct token usage badges and cascading tool-call traces, seamlessly correlating backend Python Pydantic validation models with frontend Next.js generation spans. Because Logfire is built natively on standard OTel conventions, it achieves deep visibility without requiring the installation of proprietary Logfire instrumentation SDKs, operating entirely via OTLP exporters.

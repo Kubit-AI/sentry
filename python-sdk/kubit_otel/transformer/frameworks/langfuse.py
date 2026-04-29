@@ -164,8 +164,8 @@ def aggregate_tool_definitions(span_attrs: dict) -> Optional[list]:
 
     Langfuse-LangChain (Python) injects each tool definition as a phantom
     ``tool``-role message inside ``langfuse.observation.input``. They aren't
-    chat turns — return them here so the normalizer can drop them from
-    ``input_messages`` without losing the schema.
+    chat turns — return them here so the normalizer can drop them from the
+    canonical ``input`` array without losing the schema.
     """
     raw = span_attrs.get("langfuse.observation.input")
     if raw is None:

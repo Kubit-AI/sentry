@@ -1,6 +1,6 @@
-# Canonical Message Normalization (`input_messages` / `output_messages`)
+# Canonical Message Normalization (`input` / `output`)
 
-Both SDKs project per-source LLM telemetry into a single canonical shape — the **OpenTelemetry GenAI v2 message schema** — and emit it on every record under `input_messages` and `output_messages`. The legacy `input` / `output` fields stay lossless and untouched.
+Both SDKs project per-source LLM telemetry into a single canonical shape — the **OpenTelemetry GenAI v2 message schema** — and emit it on every record under `input` and `output`. The lossless raw form (the original stringified blob, e.g. `ai.prompt`, `langfuse.observation.input`, `gen_ai.prompt`) lives alongside as `input_messages_raw` / `output_messages_raw` for consumers that need the unparsed shape.
 
 This document is the source of truth for the canonical shape and per-adapter mapping. CLAUDE.md links here from the architecture overview.
 
@@ -54,7 +54,7 @@ Native JSON arrays (not stringified). Kinesis records are already JSON documents
 
 ### `null` semantics
 
-- `input_messages: null` / `output_messages: null` means no canonical projection was found and no fallback wrapped anything.
+- `input: null` / `output: null` means no canonical projection was found and no fallback wrapped anything. The raw form may still be present on `input_messages_raw` / `output_messages_raw`.
 - A non-null array is always the canonical shape — consumers never need to JSON-parse the field.
 
 ---
@@ -97,7 +97,7 @@ Per the OTel spec the attribute carries a `Part[]` (e.g. `[{type: "text", conten
 - Wrap a plain-string emitter as a single `TextPart`.
 - Skip injection when the resolved input already starts with a `role: "system"` message.
 
-The injected message is **prepended** to `input_messages`. There is no separate top-level `system_instructions` array on the record (this was a deliberate design choice — every source ingested today already encodes the system prompt as the leading message of the conversation).
+The injected message is **prepended** to `input`. There is no separate top-level `system_instructions` array on the record (this was a deliberate design choice — every source ingested today already encodes the system prompt as the leading message of the conversation).
 
 ---
 

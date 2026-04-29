@@ -111,8 +111,8 @@ describe("OpenAI Agents v2 schema", () => {
     const [obs] = observations(
       transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"),
     );
-    expect(JSON.parse(obs.input as string)[0].content).toBe("hello");
-    expect(JSON.parse(obs.output as string)[0].content).toBe("hi");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("hello");
+    expect(JSON.parse(obs.output_messages_raw as string)[0].content).toBe("hi");
   });
 
   it("packs model_parameters from flat gen_ai.request.* keys", () => {
@@ -280,8 +280,8 @@ describe("OpenInference schema", () => {
     const [obs] = observations(
       transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"),
     );
-    expect(obs.input).toBe("what's the weather");
-    expect(obs.output).toBe("sunny");
+    expect(obs.input_messages_raw).toBe("what's the weather");
+    expect(obs.output_messages_raw).toBe("sunny");
   });
 });
 
@@ -341,7 +341,7 @@ describe("LangSmith schema", () => {
     const [obs] = observations(
       transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"),
     );
-    expect(JSON.parse(obs.input as string)[0].content).toBe("q");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("q");
   });
 });
 
@@ -366,7 +366,7 @@ describe("Logfire 'latest' mode schema", () => {
     );
     expect(obs.tags).toEqual(["prod", "web"]);
     expect(obs.type).toBe("GENERATION");
-    expect(JSON.parse(obs.input as string)[0].content).toBe("x");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("x");
   });
 });
 
@@ -522,11 +522,11 @@ describe("Indexed message unpacking (disabled adapters)", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([
       { role: "system", content: "you are helpful" },
       { role: "user", content: "hi" },
     ]);
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "hello" },
     ]);
   });
@@ -550,8 +550,8 @@ describe("Indexed message unpacking (disabled adapters)", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([{ role: "user", content: "hey" }]);
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([{ role: "user", content: "hey" }]);
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "sup" },
     ]);
   });
@@ -574,7 +574,7 @@ describe("Indexed message unpacking (disabled adapters)", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)[0].content).toBe("flat");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].content).toBe("flat");
   });
 });
 
@@ -666,8 +666,8 @@ describe("Braintrust native payloads", () => {
         "claim",
       ),
     );
-    expect((JSON.parse(obs.input as string) as { messages: { role: string }[] }).messages[0].role).toBe("user");
-    expect((JSON.parse(obs.output as string) as { content: string }).content).toBe("ok");
+    expect((JSON.parse(obs.input_messages_raw as string) as { messages: { role: string }[] }).messages[0].role).toBe("user");
+    expect((JSON.parse(obs.output_messages_raw as string) as { content: string }).content).toBe("ok");
   });
 
   it("gen_ai.prompt_json / completion_json fallback", () => {
@@ -685,8 +685,8 @@ describe("Braintrust native payloads", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)[0].role).toBe("user");
-    expect(JSON.parse(obs.output as string)[0].role).toBe("assistant");
+    expect(JSON.parse(obs.input_messages_raw as string)[0].role).toBe("user");
+    expect(JSON.parse(obs.output_messages_raw as string)[0].role).toBe("assistant");
   });
 
   it("braintrust.metrics.* promoted to usage_details", () => {
@@ -799,8 +799,8 @@ describe("Traceloop entity payloads", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe(JSON.stringify({ query: "hello" }));
-    expect(obs.output).toBe(JSON.stringify({ answer: "hi" }));
+    expect(obs.input_messages_raw).toBe(JSON.stringify({ query: "hello" }));
+    expect(obs.output_messages_raw).toBe(JSON.stringify({ answer: "hi" }));
   });
 });
 
@@ -826,7 +826,7 @@ describe("OpenInference retrieval documents", () => {
       ),
     );
     expect(obs.type).toBe("RETRIEVER");
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { content: "Paris is the capital of France.", id: "doc-1", score: 0.97 },
       { content: "The Eiffel Tower is in Paris.", id: "doc-2", score: 0.91 },
     ]);
@@ -848,7 +848,7 @@ describe("OpenInference retrieval documents", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "from messages" },
     ]);
   });
@@ -871,12 +871,12 @@ describe("OpenInference retrieval documents", () => {
       ),
     );
     // Legacy path (unpackMessages)
-    expect(obs.output).toBeTruthy();
-    expect(JSON.stringify(obs.output)).toContain("Paris is the capital of France.");
+    expect(obs.output_messages_raw).toBeTruthy();
+    expect(JSON.stringify(obs.output_messages_raw)).toContain("Paris is the capital of France.");
     // Canonical path (normalizeMessages) — guard against `[]` regression
-    expect(Array.isArray(obs.output_messages)).toBe(true);
-    expect((obs.output_messages as unknown[]).length).toBeGreaterThan(0);
-    expect(JSON.stringify(obs.output_messages)).toContain("Paris is the capital of France.");
+    expect(Array.isArray(obs.output)).toBe(true);
+    expect((obs.output as unknown[]).length).toBeGreaterThan(0);
+    expect(JSON.stringify(obs.output)).toContain("Paris is the capital of France.");
   });
 });
 
@@ -917,13 +917,13 @@ describe("OpenInference (LangChain)", () => {
       ),
     );
     expect(obs.tool_name).toBe("add");
-    expect(obs.input_messages).toEqual([
+    expect(obs.input).toEqual([
       {
         role: "assistant",
         parts: [{ type: "tool_call", name: "add", arguments: { a: 47, b: 38 } }],
       },
     ]);
-    expect(obs.output_messages).toEqual([
+    expect(obs.output).toEqual([
       {
         role: "tool",
         parts: [{ type: "tool_call_response", response: "85", id: "toolu_xyz" }],
@@ -954,7 +954,7 @@ describe("OpenInference (LangChain)", () => {
         "claim",
       ),
     );
-    expect(obs.output_messages).toEqual([
+    expect(obs.output).toEqual([
       {
         role: "tool",
         parts: [{ type: "tool_call_response", response: "result", id: "tc_1" }],
@@ -979,14 +979,14 @@ describe("OpenInference (LangChain)", () => {
         "claim",
       ),
     );
-    expect(obs.input_messages).toEqual([
+    expect(obs.input).toEqual([
       {
         role: "assistant",
         parts: [{ type: "tool_call", name: "add", arguments: { a: 1 } }],
       },
     ]);
     // Raw scalar "85" survives the JSON parse round-trip (becomes 85).
-    expect(obs.output_messages).toEqual([
+    expect(obs.output).toEqual([
       { role: "tool", parts: [{ type: "tool_call_response", response: 85 }] },
     ]);
   });
@@ -1012,7 +1012,7 @@ describe("OpenInference (LangChain)", () => {
         "claim",
       ),
     );
-    expect(obs.output_messages).toEqual([
+    expect(obs.output).toEqual([
       {
         role: "assistant",
         parts: [{ type: "tool_call", name: "add", id: "tu_1", arguments: { a: 1 } }],
@@ -1086,11 +1086,11 @@ describe("Braintrust indexed and metadata", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([
       { role: "user", content: "what's the capital of France?" },
       { role: "assistant", content: "Paris." },
     ]);
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { role: "assistant", content: "Paris." },
     ]);
   });

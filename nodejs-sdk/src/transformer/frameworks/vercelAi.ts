@@ -89,13 +89,37 @@ export const adapter = makeAdapter({
       if (!(canonicalKey in merged)) merged[canonicalKey] = val;
     }
   },
+  aggregateToolDefinitions(attrs) {
+    // Vercel emits `ai.prompt.tools` on `*.doGenerate` / `*.doStream` spans
+    // as a string-array (each entry is a JSON-encoded tool-definition object
+    // — `{type, name, description, inputSchema, ...}`). OTel attribute
+    // typing forbids nested objects, so the array-of-strings form is the
+    // wire encoding. Parse each entry; keep raw on parse failure.
+    const raw = attrs["ai.prompt.tools"];
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    const out: unknown[] = [];
+    for (const entry of raw) {
+      if (typeof entry === "string") {
+        out.push(safeJsonParse(entry) ?? entry);
+      } else {
+        out.push(entry);
+      }
+    }
+    return out.length > 0 ? out : null;
+  },
   resolveObservationType(attrs) {
     const op = attrs["ai.operationId"];
     if (typeof op !== "string") return null;
     if (op === "ai.toolCall") return "TOOL";
     if (op === "ai.generateText" || op === "ai.streamText") return "AGENT";
     if (op === "ai.generateObject" || op === "ai.streamObject") return "AGENT";
+    // Both the outer (`ai.embed` / `ai.embedMany`) and the inner provider
+    // call (`ai.embed.doEmbed` / `ai.embedMany.doEmbed`) classify as
+    // EMBEDDINGS — they carry only `ai.*` attrs (no `gen_ai.*`), so without
+    // an explicit match the inner spans would fall through to core's
+    // "model present ⇒ GENERATION" rule.
     if (op === "ai.embed" || op === "ai.embedMany") return "EMBEDDINGS";
+    if (op === "ai.embed.doEmbed" || op === "ai.embedMany.doEmbed") return "EMBEDDINGS";
     // `.doGenerate` / `.doStream` fall through to the otelGenai adapter's
     // `gen_ai.*` handling (they always carry GenAI semconv attrs).
     return null;

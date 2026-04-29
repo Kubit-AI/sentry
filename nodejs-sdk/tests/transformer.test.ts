@@ -162,7 +162,7 @@ describe("Langfuse v4 non-generation span types", () => {
     expect(obs.model).toBeNull();
     expect(obs.usage_details).toEqual({});
     expect(obs.cost_details).toEqual({});
-    expect(obs.input).toBe(JSON.stringify({ x: 1 }));
+    expect(obs.input_messages_raw).toBe(JSON.stringify({ x: 1 }));
   });
 
   it("type=tool maps to TOOL", () => {
@@ -308,7 +308,7 @@ describe("Langfuse provider/model alias coverage", () => {
         "claim",
       ),
     );
-    expect(obs.output_messages).toEqual([
+    expect(obs.output).toEqual([
       {
         role: "tool",
         name: "add",
@@ -622,7 +622,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.input as string)).toEqual([
+    expect(JSON.parse(obs.input_messages_raw as string)).toEqual([
       { role: "system", content: "be helpful" },
       { role: "user", content: "hello" },
     ]);
@@ -646,7 +646,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect(JSON.parse(obs.output as string)).toEqual([
+    expect(JSON.parse(obs.output_messages_raw as string)).toEqual([
       { index: 0, finish_reason: "stop", message: "hi" },
     ]);
   });
@@ -666,7 +666,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe("attr-form");
+    expect(obs.input_messages_raw).toBe("attr-form");
   });
 
   it("explicit event role overrides the event-name default", () => {
@@ -686,7 +686,7 @@ describe("GenAI span events", () => {
         "claim",
       ),
     );
-    expect((JSON.parse(obs.input as string) as { role: string }[])[0].role).toBe(
+    expect((JSON.parse(obs.input_messages_raw as string) as { role: string }[])[0].role).toBe(
       "developer",
     );
   });
@@ -757,8 +757,8 @@ describe("Vercel AI SDK", () => {
     );
     expect(obs.type).toBe("AGENT");
     expect(obs.agent_name).toBe("calcbot.turn");
-    expect(obs.input).toBe('{"prompt":"What is 47 + 38?"}');
-    expect(obs.output).toBe("The result of 47 + 38 is 85.");
+    expect(obs.input_messages_raw).toBe('{"prompt":"What is 47 + 38?"}');
+    expect(obs.output_messages_raw).toBe("The result of 47 + 38 is 85.");
     expect(obs.provider).toBe("anthropic");
     const usage = obs.usage_details as Record<string, number>;
     expect(usage.input).toBe(704);
@@ -787,8 +787,8 @@ describe("Vercel AI SDK", () => {
     );
     expect(obs.type).toBe("TOOL");
     expect(obs.tool_name).toBe("add");
-    expect(obs.input).toBe('{"a":47,"b":38}');
-    expect(obs.output).toBe("85");
+    expect(obs.input_messages_raw).toBe('{"a":47,"b":38}');
+    expect(obs.output_messages_raw).toBe("85");
   });
 
   it("maps ai.operationId=ai.streamText to AGENT", () => {
@@ -824,6 +824,97 @@ describe("Vercel AI SDK", () => {
     expect(obs.type).toBe("EMBEDDINGS");
   });
 
+  it("maps ai.operationId=ai.embed.doEmbed to EMBEDDINGS even when a model is present", () => {
+    // Inner provider-call spans carry `ai.model.id` — without an explicit
+    // EMBEDDINGS match they would fall through to core's "model ⇒ GENERATION".
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.embed.doEmbed",
+              "ai.model.id": "text-embedding-ada-002",
+              "ai.model.provider": "openai.embeddings",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
+    expect(obs.model).toBe("text-embedding-ada-002");
+  });
+
+  it("maps ai.operationId=ai.embedMany.doEmbed to EMBEDDINGS even when a model is present", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.embedMany.doEmbed",
+              "ai.model.id": "text-embedding-ada-002",
+              "ai.model.provider": "openai.embeddings",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("EMBEDDINGS");
+    expect(obs.model).toBe("text-embedding-ada-002");
+  });
+
+  it("aggregates ai.prompt.tools (string-array of JSON definitions) into tool_definitions", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText.doStream",
+              "ai.prompt.tools": [
+                '{"type":"function","name":"addResource","description":"add a resource","inputSchema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}',
+                '{"type":"function","name":"getInformation","description":"look up","inputSchema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}',
+              ],
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(Array.isArray(obs.tool_definitions)).toBe(true);
+    const defs = obs.tool_definitions as Array<Record<string, unknown>>;
+    expect(defs).toHaveLength(2);
+    expect(defs[0].name).toBe("addResource");
+    expect(defs[0].type).toBe("function");
+    expect(defs[1].name).toBe("getInformation");
+  });
+
+  it("keeps unparseable ai.prompt.tools entries verbatim", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText.doStream",
+              "ai.prompt.tools": ["not json", '{"name":"ok"}'],
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    const defs = obs.tool_definitions as unknown[];
+    expect(defs).toEqual(["not json", { name: "ok" }]);
+  });
+
   it("doGenerate with tool-use output captures ai.response.toolCalls as output", () => {
     const [obs] = observations(
       transformSpans(
@@ -844,10 +935,10 @@ describe("Vercel AI SDK", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe(
+    expect(obs.input_messages_raw).toBe(
       '[{"role":"user","content":[{"type":"text","text":"What is 47 + 38?"}]}]',
     );
-    expect(obs.output).toBe(
+    expect(obs.output_messages_raw).toBe(
       '[{"toolCallId":"toolu_1","toolName":"add","input":"{\\"a\\":47,\\"b\\":38}"}]',
     );
   });
@@ -870,8 +961,8 @@ describe("Vercel AI SDK", () => {
         "claim",
       ),
     );
-    expect(obs.input).toBe('[{"role":"user","content":"hi"}]');
-    expect(obs.output).toBe("hello");
+    expect(obs.input_messages_raw).toBe('[{"role":"user","content":"hi"}]');
+    expect(obs.output_messages_raw).toBe("hello");
   });
 
   it("doGenerate spans fall through to GENERATION via gen_ai.* (otelGenai adapter)", () => {
