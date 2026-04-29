@@ -991,6 +991,40 @@ describe("OpenInference (LangChain)", () => {
     ]);
   });
 
+  it("TOOL span: empty tool.name does not synthesize a tool_call", () => {
+    // Guard against an instrumentation that emits `tool.name = ""`: the
+    // synthesizer must not produce a `tool_call` part with an empty name
+    // (which would corrupt downstream call/response linking). Mirrors the
+    // Python `if not isinstance(...) or not tool_name` short-circuit.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "",
+              "input.value": JSON.stringify({ a: 1 }),
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    // Synthesizer returns {input: null, output: null}; input falls through
+    // to other adapters. Whatever lands, it must not be a tool_call with
+    // name="".
+    for (const msg of obs.input ?? []) {
+      for (const part of msg.parts ?? []) {
+        expect(
+          (part as { type: string; name?: string }).type === "tool_call" &&
+            (part as { type: string; name?: string }).name === "",
+        ).toBe(false);
+      }
+    }
+  });
+
   it("LangChain output.value blob wins over indexed messages (precedence flip)", () => {
     const [obs] = observations(
       transformSpans(

@@ -80,6 +80,17 @@ class TestOtelGenaiNormalizer:
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
         ]
 
+    # An empty ``role`` string is treated as missing and defaults to "user" —
+    # an empty role would otherwise produce a malformed canonical message.
+    def test_defaults_empty_role_to_user(self):
+        span = _mock_span(attrs={
+            "gen_ai.input.messages": json.dumps([{"role": "", "content": "hi"}]),
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
+        ]
+
     def test_legacy_prompt_completion(self):
         span = _mock_span(attrs={"gen_ai.prompt": "hi", "gen_ai.completion": "there"})
         r = _obs(_transform(span))
@@ -565,6 +576,27 @@ class TestTraceloopNormalizer:
             {"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}
         ]
 
+    # When the indexed primary ``tool_call_id`` is an empty string but the
+    # dotted alias ``tool_call.id`` carries a real value, the canonical
+    # ``tool_call_response`` part picks up the alt-key id rather than emitting
+    # an empty ``id`` that would break call/response linking downstream.
+    def test_empty_tool_call_id_falls_through_to_dotted_alias(self):
+        span = _mock_span(attrs={
+            "gen_ai.prompt.0.role": "tool",
+            "gen_ai.prompt.0.tool_call_id": "",
+            "gen_ai.prompt.0.tool_call.id": "call_abc123",
+            "gen_ai.prompt.0.content": "weather: sunny",
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {
+                "role": "tool",
+                "parts": [
+                    {"type": "tool_call_response", "response": "weather: sunny", "id": "call_abc123"},
+                ],
+            }
+        ]
+
     # OpenLLMetry's @workflow / @task decorators dump opaque entity blobs
     # (``{"inputs":{...},"tags":[...],"metadata":{...}}``) into
     # ``traceloop.entity.input`` / ``traceloop.entity.output``. Wrapping those
@@ -901,6 +933,18 @@ class TestLogfireNormalizer:
                 {"type": "tool_call", "name": "x", "arguments": {"a": 1}, "id": "c1"},
             ],
         }]
+
+
+    # An empty ``part_kind`` string falls through the named cases and lands on
+    # the default branch — the generic part is built with kind ``"unknown"``
+    # rather than passing the empty string through.
+    def test_defaults_empty_part_kind_to_unknown(self):
+        envelope = json.dumps([
+            {"kind": "request", "parts": [{"part_kind": "", "content": "x"}]}
+        ])
+        span = _mock_span(attrs={"pydantic_ai.all_messages": envelope})
+        r = _obs(_transform(span))
+        assert r["input"][0]["parts"][0]["type"] == "unknown"
 
 
 # ── langfuse ───────────────────────────────────────────────────────────────

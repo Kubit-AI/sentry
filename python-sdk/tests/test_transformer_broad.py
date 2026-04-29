@@ -790,6 +790,26 @@ class TestOpenInferenceLangChain:
             "parts": [{"type": "tool_call_response", "response": 85}],
         }]
 
+    def test_tool_span_with_empty_tool_name_does_not_synthesize(self):
+        # Guard against an instrumentation that emits ``tool.name = ""``: the
+        # synthesizer must not produce a ``tool_call`` part with an empty name
+        # (which would corrupt downstream call/response linking). Mirrors the
+        # TS ``if (!toolName) return ...`` short-circuit.
+        span = _mock_span(
+            attributes={
+                "openinference.span.kind": "TOOL",
+                "tool.name": "",
+                "input.value": json.dumps({"a": 1}),
+                "output.value": "ok",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        # Synthesizer returns (None, None); input falls through to other
+        # adapters. Whatever lands, it must not be a tool_call with name="".
+        for msg in obs.get("input") or []:
+            for part in msg.get("parts", []):
+                assert not (part.get("type") == "tool_call" and part.get("name") == "")
+
     def test_langchain_blob_wins_over_indexed_messages(self):
         span = _mock_span(
             attributes={

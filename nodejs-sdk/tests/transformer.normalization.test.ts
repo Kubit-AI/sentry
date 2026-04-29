@@ -91,6 +91,22 @@ describe("otelGenai normalizer", () => {
     ]);
   });
 
+  // An empty `role` string is treated as missing and defaults to "user" — an
+  // empty role would otherwise produce a malformed canonical message.
+  it("defaults empty role to 'user'", () => {
+    const span = makeSpan({
+      attrs: {
+        "gen_ai.input.messages": JSON.stringify([
+          { role: "", content: "hi" },
+        ]),
+      },
+    });
+    const r = obs(transformSpans([span], "w", "c"));
+    expect(r.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "hi" }] },
+    ]);
+  });
+
   it("text-wraps legacy gen_ai.prompt / gen_ai.completion", () => {
     const span = makeSpan({
       attrs: { "gen_ai.prompt": "hi", "gen_ai.completion": "there" },
@@ -613,6 +629,28 @@ describe("traceloop normalizer", () => {
     ]);
   });
 
+  // When the indexed primary `tool_call_id` is an empty string but the dotted
+  // alias `tool_call.id` carries a real value, the canonical
+  // `tool_call_response` part picks up the alt-key id rather than emitting an
+  // empty `id` that would break call/response linking downstream.
+  it("falls through empty tool_call_id to dotted tool_call.id alias", () => {
+    const attrs: Record<string, unknown> = {
+      "gen_ai.prompt.0.role": "tool",
+      "gen_ai.prompt.0.tool_call_id": "",
+      "gen_ai.prompt.0.tool_call.id": "call_abc123",
+      "gen_ai.prompt.0.content": "weather: sunny",
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      {
+        role: "tool",
+        parts: [
+          { type: "tool_call_response", response: "weather: sunny", id: "call_abc123" },
+        ],
+      },
+    ]);
+  });
+
   // OpenLLMetry's @workflow / @task decorators dump opaque entity blobs
   // (`{"inputs":{...},"tags":[...],"metadata":{...}}`) into
   // `traceloop.entity.input` / `traceloop.entity.output`. Wrapping those into
@@ -976,6 +1014,28 @@ describe("logfire normalizer (Pydantic AI envelope)", () => {
         ],
       },
     ]);
+  });
+
+  // An empty `part_kind` string falls through the switch's named cases and
+  // lands on the default branch — the generic part is built with kind
+  // "unknown" rather than passing the empty string through.
+  it("defaults empty part_kind to 'unknown' on pydantic-ai parts", () => {
+    const envelope = JSON.stringify([
+      {
+        kind: "request",
+        parts: [{ part_kind: "", content: "x" }],
+      },
+    ]);
+    const r = obs(
+      transformSpans(
+        [makeSpan({ attrs: { "pydantic_ai.all_messages": envelope } })],
+        "w",
+        "c",
+      ),
+    );
+    const part = (r.input as Array<{ parts: Array<{ type: string }> }>)[0]
+      .parts[0];
+    expect(part.type).toBe("unknown");
   });
 });
 

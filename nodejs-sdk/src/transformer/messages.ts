@@ -228,7 +228,7 @@ type OpenAIToolCall = {
  * input_audio), assistant.tool_calls, tool.tool_call_id.
  */
 export function openAIMessageToCanonical(msg: Record<string, unknown>): Message {
-  const role = (msg.role as Role) ?? "user";
+  const role = ((msg.role as Role) || "user") as Role;
   const parts: Part[] = [];
 
   const content = msg.content;
@@ -440,7 +440,7 @@ function pydanticAIRequestToMessages(parts: PydanticAIPart[]): Message[] {
       default:
         out.push({
           role: "user",
-          parts: [genericPart(p.part_kind ?? "unknown", { ...p })],
+          parts: [genericPart(p.part_kind || "unknown", { ...p })],
         });
     }
   }
@@ -465,7 +465,7 @@ function pydanticAIResponseToMessage(parts: PydanticAIPart[]): Message | null {
         );
         break;
       default:
-        canonical.push(genericPart(p.part_kind ?? "unknown", { ...p }));
+        canonical.push(genericPart(p.part_kind || "unknown", { ...p }));
     }
   }
   if (canonical.length === 0) return null;
@@ -982,7 +982,7 @@ function indexedFieldsToMessage(fields: Record<string, unknown>): Message {
   const role = typeof fields.role === "string" ? (fields.role as Role) : "user";
   const parts: Part[] = [];
   const content = fields.content;
-  const toolCallId = fields.tool_call_id ?? fields["tool_call.id"];
+  const toolCallId = fields.tool_call_id || fields["tool_call.id"];
 
   if (role === "tool" && typeof toolCallId === "string") {
     parts.push(toolCallResponsePart(content ?? null, toolCallId));

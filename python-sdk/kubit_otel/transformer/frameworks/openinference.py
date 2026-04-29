@@ -294,7 +294,7 @@ def _synthesize_tool_span_messages(span_attrs: dict) -> tuple[Optional[list], Op
     if clean_discriminator(span_attrs.get(_SPAN_KIND_ATTR)) != "tool":
         return None, None
     tool_name = span_attrs.get("tool.name")
-    if not isinstance(tool_name, str):
+    if not isinstance(tool_name, str) or not tool_name:
         return None, None
 
     raw_in = span_attrs.get("input.value")
