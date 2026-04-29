@@ -457,6 +457,126 @@ describe("openinference normalizer (LangChain envelope)", () => {
     ]);
   });
 
+  // `langchain_core.messages.utils.messages_to_dict` (used by LangGraph state
+  // serialization and many CHAIN-span outputs) emits each BaseMessage as
+  // {type: "<role>", data: {<actual fields>}} rather than the flat
+  // BaseMessage.dict() shape. The plain-dict translator must descend into
+  // `data` to reach `content` / `tool_calls` / `tool_call_id`.
+  it("translates messages_to_dict envelope (full human → ai+tool_calls → tool → ai)", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "chain",
+      "input.value": JSON.stringify({
+        messages: [
+          { type: "human", data: { content: "What is 47 + 38?", type: "human", id: "h1" } },
+          { type: "ai", data: {
+              content: "",
+              type: "ai",
+              id: "a1",
+              tool_calls: [
+                { name: "add", args: { a: 47, b: 38 }, id: "toolu_x", type: "tool_call" },
+              ],
+            } },
+          { type: "tool", data: {
+              content: "85", type: "tool", name: "add", tool_call_id: "toolu_x", id: "t1",
+            } },
+          { type: "ai", data: { content: "47 + 38 = 85", type: "ai", id: "a2" } },
+        ],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input_messages).toEqual([
+      { role: "user", parts: [{ type: "text", content: "What is 47 + 38?" }] },
+      { role: "assistant", parts: [
+          { type: "tool_call", name: "add", id: "toolu_x", arguments: { a: 47, b: 38 } },
+        ] },
+      {
+        role: "tool",
+        parts: [{ type: "tool_call_response", response: "85", id: "toolu_x" }],
+        name: "add",
+      },
+      { role: "assistant", parts: [{ type: "text", content: "47 + 38 = 85" }] },
+    ]);
+  });
+
+  // Single bare {type:"ai", data:{...}} envelope (LangChain's `message_to_dict`
+  // of a lone AIMessage with tool_calls) — observed on `_ConfigurableModel`
+  // CHAIN spans whose `output.value` carries one assistant turn rather than a
+  // conversation list.
+  it("translates single messages_to_dict AI envelope with tool_calls", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "chain",
+      "output.value": JSON.stringify({
+        type: "ai",
+        data: {
+          content: "",
+          type: "ai",
+          id: "lc_run--xxx",
+          tool_calls: [
+            { name: "ConductResearch", args: { research_topic: "capital of Australia" },
+              id: "call_w", type: "tool_call" },
+          ],
+        },
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "tool_call", name: "ConductResearch", id: "call_w",
+            arguments: { research_topic: "capital of Australia" } },
+        ],
+      },
+    ]);
+  });
+
+  // `langgraph.types.Command` (returned by every node that wants to steer the
+  // graph + update state) is serialized by OpenInference as
+  // {graph: null, update: {...}, resume: ..., goto: "<node>"}. Recurse into
+  // `update` so the inner `messages` list is reachable.
+  it("unwraps LangGraph Command envelope and reaches inner messages", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "chain",
+      "output.value": JSON.stringify({
+        graph: null,
+        update: {
+          messages: [
+            { type: "ai", data: {
+                content: "Thank you for your request.",
+                type: "ai",
+                id: "a1",
+                tool_calls: [],
+              } },
+          ],
+        },
+        resume: null,
+        goto: "write_research_brief",
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toEqual([
+      { role: "assistant", parts: [
+          { type: "text", content: "Thank you for your request." },
+        ] },
+    ]);
+  });
+
+  // `Command` without an `update.messages` payload (pure routing) carries no
+  // canonical messages — return null rather than fabricating one.
+  it("returns null for Command envelope without inner messages", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "chain",
+      "output.value": JSON.stringify({
+        graph: null,
+        update: { researcher_messages: [] },
+        resume: null,
+        goto: "compress_research",
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output_messages).toBeNull();
+  });
+
   // Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing
   // {output:[{lg_name:"Send",...}]}) used to be text-wrapped into a fake
   // `[{role:"assistant", parts:[{type:"text", content:"<entire JSON blob>"}]}]`.

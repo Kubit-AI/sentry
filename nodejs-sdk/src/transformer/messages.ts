@@ -568,6 +568,20 @@ function unwrapLangchainEnvelope(value: unknown): unknown[] | null {
   // `metadata`, `kwargs`). Recurse through them like the singular variants.
   if (obj.inputs !== undefined) return unwrapLangchainEnvelope(obj.inputs);
   if (obj.outputs !== undefined) return unwrapLangchainEnvelope(obj.outputs);
+  // `langgraph.types.Command` is the standard return value for nodes that
+  // steer the graph plus update state. OpenInference serializes it as
+  // {graph: ..., update: <state-delta>, resume: ..., goto: <node>}. Recurse
+  // into `update` so an inner `messages` list is reachable; if the
+  // state-delta uses an app-specific key (`researcher_messages` etc.) the
+  // recursion returns null and the caller falls through.
+  if (
+    "goto" in obj &&
+    obj.update !== null &&
+    typeof obj.update === "object" &&
+    !Array.isArray(obj.update)
+  ) {
+    return unwrapLangchainEnvelope(obj.update);
+  }
   if (isLangchainMessageSerializable(obj)) return [obj];
   if (isLangchainPlainDictMessage(obj)) return [obj];
   return null;
@@ -680,6 +694,16 @@ function langchainSerializableToMessage(item: unknown): Message | null {
 }
 
 function langchainPlainDictToMessage(obj: Record<string, unknown>): Message | null {
+  // `langchain_core.messages.utils.messages_to_dict` wraps each BaseMessage as
+  // {type: <role>, data: {<actual fields>}} (used by LangGraph state
+  // serialization and CHAIN-span output blobs). Descend into `data` so the
+  // flat-dict reader below finds `content` / `tool_calls` / `tool_call_id` /
+  // `name`. The plain BaseMessage.dict() shape has no `data` key and falls
+  // through unchanged.
+  const data = obj.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    obj = data as Record<string, unknown>;
+  }
   const t = String(obj.type);
   const content = obj.content;
   switch (t) {

@@ -556,6 +556,14 @@ def _unwrap_langchain_envelope(value: Any) -> Optional[list]:
         return _unwrap_langchain_envelope(value["inputs"])
     if "outputs" in value:
         return _unwrap_langchain_envelope(value["outputs"])
+    # ``langgraph.types.Command`` is the standard return value for nodes that
+    # steer the graph plus update state. OpenInference serializes it as
+    # ``{graph: ..., update: <state-delta>, resume: ..., goto: <node>}``.
+    # Recurse into ``update`` so an inner ``messages`` list is reachable; if
+    # the state-delta uses an app-specific key (``researcher_messages`` etc.)
+    # the recursion returns None and the caller falls through.
+    if "goto" in value and isinstance(value.get("update"), dict):
+        return _unwrap_langchain_envelope(value["update"])
     if _is_langchain_message_serializable(value):
         return [value]
     if _is_langchain_plain_dict_message(value):
@@ -648,6 +656,15 @@ def _langchain_serializable_to_message(item: Any) -> Optional[Message]:
 
 
 def _langchain_plain_dict_to_message(obj: dict) -> Optional[Message]:
+    # ``langchain_core.messages.utils.messages_to_dict`` wraps each BaseMessage
+    # as ``{"type": <role>, "data": {<actual fields>}}`` (used by LangGraph
+    # state serialization and CHAIN-span output blobs). Descend into ``data``
+    # so the flat-dict reader below finds ``content`` / ``tool_calls`` /
+    # ``tool_call_id`` / ``name``. The plain ``BaseMessage.dict()`` shape has
+    # no ``data`` key and falls through unchanged.
+    data = obj.get("data")
+    if isinstance(data, dict):
+        obj = data
     t = str(obj.get("type"))
     content = obj.get("content")
     if t == "human":

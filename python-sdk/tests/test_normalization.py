@@ -414,6 +414,120 @@ class TestOpeninferenceLangchainEnvelope:
             },
         ]
 
+    # ``langchain_core.messages.utils.messages_to_dict`` (used by LangGraph state
+    # serialization and many CHAIN-span outputs) emits each BaseMessage as
+    # ``{"type": "<role>", "data": {<actual fields>}}`` rather than the flat
+    # ``BaseMessage.dict()`` shape. The plain-dict translator must descend into
+    # ``data`` to reach ``content`` / ``tool_calls`` / ``tool_call_id``.
+    def test_messages_to_dict_envelope_full_transcript(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "chain",
+            "input.value": json.dumps({
+                "messages": [
+                    {"type": "human", "data": {"content": "What is 47 + 38?", "type": "human", "id": "h1"}},
+                    {"type": "ai", "data": {
+                        "content": "",
+                        "type": "ai",
+                        "id": "a1",
+                        "tool_calls": [
+                            {"name": "add", "args": {"a": 47, "b": 38}, "id": "toolu_x", "type": "tool_call"},
+                        ],
+                    }},
+                    {"type": "tool", "data": {
+                        "content": "85", "type": "tool", "name": "add", "tool_call_id": "toolu_x", "id": "t1",
+                    }},
+                    {"type": "ai", "data": {"content": "47 + 38 = 85", "type": "ai", "id": "a2"}},
+                ],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input_messages"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "What is 47 + 38?"}]},
+            {"role": "assistant", "parts": [
+                {"type": "tool_call", "name": "add", "id": "toolu_x", "arguments": {"a": 47, "b": 38}},
+            ]},
+            {
+                "role": "tool",
+                "parts": [{"type": "tool_call_response", "response": "85", "id": "toolu_x"}],
+                "name": "add",
+            },
+            {"role": "assistant", "parts": [{"type": "text", "content": "47 + 38 = 85"}]},
+        ]
+
+    # Single bare ``{"type": "ai", "data": {...}}`` envelope (LangChain's
+    # ``message_to_dict`` of a lone AIMessage with tool_calls) — observed on
+    # ``_ConfigurableModel`` CHAIN spans whose ``output.value`` carries one
+    # assistant turn rather than a conversation list.
+    def test_messages_to_dict_single_ai_with_tool_calls(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "chain",
+            "output.value": json.dumps({
+                "type": "ai",
+                "data": {
+                    "content": "",
+                    "type": "ai",
+                    "id": "lc_run--xxx",
+                    "tool_calls": [
+                        {"name": "ConductResearch", "args": {"research_topic": "capital of Australia"},
+                         "id": "call_w", "type": "tool_call"},
+                    ],
+                },
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] == [{
+            "role": "assistant",
+            "parts": [
+                {"type": "tool_call", "name": "ConductResearch", "id": "call_w",
+                 "arguments": {"research_topic": "capital of Australia"}},
+            ],
+        }]
+
+    # ``langgraph.types.Command`` (returned by every node that wants to steer
+    # the graph + update state) is serialized by OpenInference as
+    # ``{"graph": null, "update": {...}, "resume": ..., "goto": "<node>"}``.
+    # Recurse into ``update`` so the inner ``messages`` list is reachable.
+    def test_unwraps_langgraph_command_envelope(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "chain",
+            "output.value": json.dumps({
+                "graph": None,
+                "update": {
+                    "messages": [
+                        {"type": "ai", "data": {
+                            "content": "Thank you for your request.",
+                            "type": "ai",
+                            "id": "a1",
+                            "tool_calls": [],
+                        }},
+                    ],
+                },
+                "resume": None,
+                "goto": "write_research_brief",
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] == [
+            {"role": "assistant", "parts": [
+                {"type": "text", "content": "Thank you for your request."},
+            ]},
+        ]
+
+    # ``Command`` without an ``update.messages`` payload (pure routing) carries
+    # no canonical messages — return null rather than fabricating one.
+    def test_command_envelope_without_messages_returns_null(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "chain",
+            "output.value": json.dumps({
+                "graph": None,
+                "update": {"researcher_messages": []},  # app-specific state, not `messages`
+                "resume": None,
+                "goto": "compress_research",
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output_messages"] is None
+
     # Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing
     # ``{output:[{lg_name:"Send",...}]}``) used to be text-wrapped into a fake
     # ``[{role:"assistant", parts:[{type:"text", content:"<entire JSON blob>"}]}]``.
