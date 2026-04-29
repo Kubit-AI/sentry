@@ -774,6 +774,147 @@ describe("vercelAi normalizer", () => {
       },
     ]);
   });
+
+  it("unpacks ai.prompt {system, messages:[...]} blob on agent-level spans", () => {
+    // ai.streamText / ai.generateText emit the full prompt as a single JSON
+    // blob in `ai.prompt` (no `ai.prompt.messages` at the agent level), with
+    // shape {system: string, messages: [{role, content: [...]}]}. The blob
+    // must be unpacked: `system` becomes a leading system message, and
+    // `messages` are routed through the existing OpenAI/Vercel-shape coercer.
+    const attrs: Record<string, unknown> = {
+      "ai.operationId": "ai.streamText",
+      "ai.prompt": JSON.stringify({
+        system: "Be concise.",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "who am I?" }] },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "call_1",
+                toolName: "lookup",
+                input: { q: "user" },
+              },
+            ],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: "call_1",
+                toolName: "lookup",
+                output: { type: "json", value: { name: "Rado" } },
+              },
+            ],
+          },
+        ],
+      }),
+      "ai.response.text": "You are Rado.",
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      { role: "system", parts: [{ type: "text", content: "Be concise." }] },
+      { role: "user", parts: [{ type: "text", content: "who am I?" }] },
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "lookup",
+            id: "call_1",
+            arguments: { q: "user" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        parts: [
+          {
+            type: "tool_call_response",
+            response: { name: "Rado" },
+            id: "call_1",
+          },
+        ],
+      },
+    ]);
+    expect(r.output).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "You are Rado." }] },
+    ]);
+  });
+
+  it("unpacks ai.prompt blob without system field", () => {
+    const attrs: Record<string, unknown> = {
+      "ai.operationId": "ai.generateText",
+      "ai.prompt": JSON.stringify({
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "hi" }] },
+    ]);
+  });
+
+  it("falls back to user text when ai.prompt is a plain string", () => {
+    const attrs: Record<string, unknown> = {
+      "ai.operationId": "ai.generateText",
+      "ai.prompt": "Just a freeform prompt",
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "Just a freeform prompt" }] },
+    ]);
+  });
+
+  it("projects ai.embed (singular) input as canonical user-text + maps ai.usage.tokens", () => {
+    const attrs: Record<string, unknown> = {
+      "ai.operationId": "ai.embed",
+      "ai.value": "How would you describe me?",
+      "ai.usage.tokens": 6,
+      "ai.model.id": "text-embedding-ada-002",
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "How would you describe me?" }] },
+    ]);
+    // Core auto-derives `total` from `input + output` when total is unset.
+    expect(r.usage_details).toEqual({ input: 6, total: 6 });
+  });
+
+  it("projects ai.embedMany inputs (JSON-stringified array) as one user message per entry", () => {
+    // Vercel JSON.stringify-encodes each entry in `ai.values` to fit OTel's
+    // string-array attribute constraint, so a value of "User's name is Rado"
+    // arrives as the literal `"\"User's name is Rado\""`. Each entry must be
+    // unwrapped before going into a TextPart.
+    const attrs: Record<string, unknown> = {
+      "ai.operationId": "ai.embedMany",
+      "ai.values": ['"User\'s name is Rado"', '"Loves espresso"'],
+      "ai.usage.tokens": 12,
+      "ai.model.id": "text-embedding-ada-002",
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "User's name is Rado" }] },
+      { role: "user", parts: [{ type: "text", content: "Loves espresso" }] },
+    ]);
+    expect(r.usage_details).toEqual({ input: 12, total: 12 });
+  });
+
+  it("ai.embedMany handles non-JSON entries by passing them through as text", () => {
+    // Defensive: if an upstream emits already-decoded strings (no JSON
+    // escaping), keep them verbatim instead of producing null parts.
+    const attrs: Record<string, unknown> = {
+      "ai.operationId": "ai.embedMany",
+      "ai.values": ["raw entry one", "raw entry two"],
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "raw entry one" }] },
+      { role: "user", parts: [{ type: "text", content: "raw entry two" }] },
+    ]);
+  });
 });
 
 describe("logfire normalizer (Pydantic AI envelope)", () => {

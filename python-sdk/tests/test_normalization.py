@@ -709,6 +709,142 @@ class TestVercelAiNormalizer:
             "parts": [{"type": "tool_call_response", "response": {"temp": 22}}],
         }]
 
+    def test_unpacks_ai_prompt_system_messages_blob_on_agent_span(self):
+        # ai.streamText / ai.generateText emit the full prompt as a single JSON
+        # blob in ``ai.prompt`` (no ``ai.prompt.messages`` at the agent level),
+        # with shape {system: str, messages: [{role, content: [...]}]}. The
+        # blob must be unpacked: ``system`` becomes a leading system message,
+        # and ``messages`` are routed through the existing OpenAI/Vercel-shape
+        # coercer.
+        span = _mock_span(attrs={
+            "ai.operationId": "ai.streamText",
+            "ai.prompt": json.dumps({
+                "system": "Be concise.",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "who am I?"}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool-call",
+                                "toolCallId": "call_1",
+                                "toolName": "lookup",
+                                "input": {"q": "user"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "content": [
+                            {
+                                "type": "tool-result",
+                                "toolCallId": "call_1",
+                                "toolName": "lookup",
+                                "output": {"type": "json", "value": {"name": "Rado"}},
+                            }
+                        ],
+                    },
+                ],
+            }),
+            "ai.response.text": "You are Rado.",
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "system", "parts": [{"type": "text", "content": "Be concise."}]},
+            {"role": "user", "parts": [{"type": "text", "content": "who am I?"}]},
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "name": "lookup",
+                        "id": "call_1",
+                        "arguments": {"q": "user"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "response": {"name": "Rado"},
+                        "id": "call_1",
+                    }
+                ],
+            },
+        ]
+        assert r["output"] == [
+            {"role": "assistant", "parts": [{"type": "text", "content": "You are Rado."}]},
+        ]
+
+    def test_unpacks_ai_prompt_blob_without_system_field(self):
+        span = _mock_span(attrs={
+            "ai.operationId": "ai.generateText",
+            "ai.prompt": json.dumps({
+                "messages": [{"role": "user", "content": "hi"}],
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
+        ]
+
+    def test_ai_prompt_plain_string_still_wrapped_as_user_text(self):
+        span = _mock_span(attrs={
+            "ai.operationId": "ai.generateText",
+            "ai.prompt": "Just a freeform prompt",
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "Just a freeform prompt"}]}
+        ]
+
+    def test_projects_ai_embed_singular_input_and_maps_ai_usage_tokens(self):
+        span = _mock_span(attrs={
+            "ai.operationId": "ai.embed",
+            "ai.value": "How would you describe me?",
+            "ai.usage.tokens": 6,
+            "ai.model.id": "text-embedding-ada-002",
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "How would you describe me?"}]}
+        ]
+        # Core auto-derives ``total`` from ``input + output`` when total is unset.
+        assert r["usage_details"] == {"input": 6, "total": 6}
+
+    def test_projects_ai_embed_many_inputs_per_entry(self):
+        # Vercel JSON.stringify-encodes each entry in ``ai.values`` to fit
+        # OTel's string-array attribute constraint, so a value of "User's name
+        # is Rado" arrives as the literal ``"\"User's name is Rado\""``. Each
+        # entry must be unwrapped before going into a TextPart.
+        span = _mock_span(attrs={
+            "ai.operationId": "ai.embedMany",
+            "ai.values": ['"User\'s name is Rado"', '"Loves espresso"'],
+            "ai.usage.tokens": 12,
+            "ai.model.id": "text-embedding-ada-002",
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "User's name is Rado"}]},
+            {"role": "user", "parts": [{"type": "text", "content": "Loves espresso"}]},
+        ]
+        assert r["usage_details"] == {"input": 12, "total": 12}
+
+    def test_ai_embed_many_handles_non_json_entries_as_text(self):
+        # Defensive: if an upstream emits already-decoded strings (no JSON
+        # escaping), keep them verbatim instead of producing empty parts.
+        span = _mock_span(attrs={
+            "ai.operationId": "ai.embedMany",
+            "ai.values": ["raw entry one", "raw entry two"],
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "raw entry one"}]},
+            {"role": "user", "parts": [{"type": "text", "content": "raw entry two"}]},
+        ]
+
 
 # ── logfire (Pydantic AI envelope) ────────────────────────────────────────
 

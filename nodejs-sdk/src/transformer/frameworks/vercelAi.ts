@@ -71,13 +71,25 @@ export const adapter = makeAdapter({
   NAME: "vercel_ai",
   MODEL_ATTRS: ["ai.response.model", "ai.model.id", "ai.model"],
   PROVIDED_MODEL_ATTRS: ["ai.model.id", "ai.model"],
-  INPUT_ATTRS: ["ai.prompt.messages", "ai.prompt", "ai.toolCall.args"],
+  INPUT_ATTRS: [
+    "ai.prompt.messages",
+    "ai.prompt",
+    "ai.toolCall.args",
+    // Embedding spans: `ai.value` (singular) on `ai.embed`, `ai.values`
+    // (string-array) on `ai.embedMany` and on the inner `*.doEmbed` provider
+    // calls. These are the texts being embedded.
+    "ai.value",
+    "ai.values",
+  ],
   OUTPUT_ATTRS: [
     "ai.response.text",
     "ai.response.toolCalls",
     "ai.toolCall.result",
   ],
-  INPUT_TOKENS_ATTRS: ["ai.usage.promptTokens"],
+  // `ai.usage.tokens` (singular) is what Vercel emits on embedding spans,
+  // which have no completion side. Listed as a fallback after the chat
+  // attributes so non-embedding Vercel spans still prefer `promptTokens`.
+  INPUT_TOKENS_ATTRS: ["ai.usage.promptTokens", "ai.usage.tokens"],
   OUTPUT_TOKENS_ATTRS: ["ai.usage.completionTokens"],
   PROVIDER_ATTRS: ["ai.model.provider"],
   TOOL_NAME_ATTRS: ["ai.toolCall.name"],
@@ -144,7 +156,8 @@ export const adapter = makeAdapter({
       if (coerced && coerced.length > 0) input = coerced;
     }
     if (input === null && typeof attrs["ai.prompt"] === "string" && (attrs["ai.prompt"] as string).length > 0) {
-      input = [textMessage("user", attrs["ai.prompt"] as string)];
+      input = unpackAiPromptBlob(attrs["ai.prompt"] as string)
+        ?? [textMessage("user", attrs["ai.prompt"] as string)];
     }
     // Tool execution span: input represents the tool invocation.
     if (input === null) {
@@ -160,6 +173,14 @@ export const adapter = makeAdapter({
           },
         ];
       }
+    }
+    // Embedding span inputs: project `ai.value` / `ai.values` as one canonical
+    // user-text message per text being embedded. Each entry in `ai.values` is
+    // JSON.stringify-encoded by Vercel to fit OTel's string-array constraint;
+    // unwrap when the entry parses back to a string, fall through otherwise.
+    if (input === null) {
+      const messages = embedInputsToMessages(attrs);
+      if (messages !== null) input = messages;
     }
 
     // ── Output side ──────────────────────────────────────────────────────
@@ -201,6 +222,75 @@ export const adapter = makeAdapter({
     return { input, output };
   },
 });
+
+/**
+ * Project Vercel embedding-span inputs (`ai.value` singular for `ai.embed`,
+ * `ai.values` string-array for `ai.embedMany` / `*.doEmbed`) into canonical
+ * `user`-text messages. Each entry in `ai.values` is JSON.stringify-encoded
+ * by Vercel to fit OTel's string-array attribute constraint, so unwrap when
+ * the entry parses back to a string and fall through to the raw value
+ * otherwise.
+ */
+function embedInputsToMessages(
+  attrs: Record<string, unknown>,
+): Message[] | null {
+  const value = attrs["ai.value"];
+  if (typeof value === "string" && value.length > 0) {
+    return [textMessage("user", value)];
+  }
+  const values = attrs["ai.values"];
+  if (Array.isArray(values) && values.length > 0) {
+    const out: Message[] = [];
+    for (const entry of values) {
+      if (typeof entry !== "string") {
+        const text = stringifyEmbedEntry(entry);
+        if (text.length > 0) out.push(textMessage("user", text));
+        continue;
+      }
+      const parsed = safeJsonParse(entry);
+      const text = typeof parsed === "string" ? parsed : entry;
+      if (text.length > 0) out.push(textMessage("user", text));
+    }
+    return out.length > 0 ? out : null;
+  }
+  return null;
+}
+
+function stringifyEmbedEntry(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+/**
+ * Vercel AI's outer agent spans (`ai.streamText` / `ai.generateText` /
+ * `ai.streamObject` / `ai.generateObject`) emit the full prompt as a single
+ * JSON blob in `ai.prompt` rather than indexed `ai.prompt.messages.*`. Shape:
+ * `{system?: string, messages: [{role, content: ...}, ...]}`. Unpack it so
+ * the system instruction becomes a leading system message and the inner
+ * messages route through the OpenAI/Vercel-shape coercer (which already
+ * understands `tool-call` / `tool-result` Vercel content parts).
+ *
+ * Returns null when the blob doesn't match the shape — caller falls back to
+ * wrapping the raw string as a user-text message.
+ */
+function unpackAiPromptBlob(raw: string): Message[] | null {
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (!Array.isArray(obj.messages)) return null;
+  const out: Message[] = [];
+  if (typeof obj.system === "string" && obj.system.length > 0) {
+    out.push(textMessage("system", obj.system));
+  }
+  const coerced = coerceToMessages(obj.messages);
+  if (coerced) out.push(...coerced);
+  return out.length > 0 ? out : null;
+}
 
 function parseVercelToolCalls(raw: unknown): ToolCallRequestPart[] {
   const parsed = typeof raw === "string" ? safeJsonParse(raw) : raw;

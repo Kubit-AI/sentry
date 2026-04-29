@@ -38,6 +38,11 @@ INPUT_ATTRS = (
     "ai.prompt.messages",
     "ai.prompt",
     "ai.toolCall.args",
+    # Embedding spans: ``ai.value`` (singular) on ``ai.embed``, ``ai.values``
+    # (string-array) on ``ai.embedMany`` and the inner ``*.doEmbed`` provider
+    # calls. These are the texts being embedded.
+    "ai.value",
+    "ai.values",
 )
 OUTPUT_ATTRS = (
     "ai.response.text",
@@ -45,7 +50,10 @@ OUTPUT_ATTRS = (
     "ai.toolCall.result",
 )
 
-INPUT_TOKENS_ATTRS = ("ai.usage.promptTokens",)
+# ``ai.usage.tokens`` (singular) is what Vercel emits on embedding spans,
+# which have no completion side. Listed as a fallback after the chat
+# attributes so non-embedding Vercel spans still prefer ``promptTokens``.
+INPUT_TOKENS_ATTRS = ("ai.usage.promptTokens", "ai.usage.tokens")
 OUTPUT_TOKENS_ATTRS = ("ai.usage.completionTokens",)
 TOTAL_TOKENS_ATTRS: tuple[str, ...] = ()
 
@@ -203,7 +211,7 @@ def normalize_messages(span_attrs: dict) -> Optional[dict]:
     if input_msgs is None:
         prompt = span_attrs.get("ai.prompt")
         if isinstance(prompt, str) and prompt:
-            input_msgs = [text_message("user", prompt)]
+            input_msgs = _unpack_ai_prompt_blob(prompt) or [text_message("user", prompt)]
     # Tool execution span: input represents the tool invocation.
     if input_msgs is None:
         args = span_attrs.get("ai.toolCall.args")
@@ -219,6 +227,15 @@ def normalize_messages(span_attrs: dict) -> Optional[dict]:
                 "role": "assistant",
                 "parts": [tool_call_part(tool_name, parsed_args, tool_call_id)],
             }]
+    # Embedding span inputs: project ``ai.value`` / ``ai.values`` as one
+    # canonical user-text message per text being embedded. Each entry in
+    # ``ai.values`` is JSON.stringify-encoded by Vercel to fit OTel's
+    # string-array constraint; unwrap when the entry parses back to a string,
+    # fall through otherwise.
+    if input_msgs is None:
+        embed_msgs = _embed_inputs_to_messages(span_attrs)
+        if embed_msgs is not None:
+            input_msgs = embed_msgs
 
     # ── Output side ──────────────────────────────────────────────────────
     output_msgs: Optional[list] = None
@@ -250,6 +267,74 @@ def normalize_messages(span_attrs: dict) -> Optional[dict]:
     if input_msgs is None and output_msgs is None:
         return None
     return {"input": input_msgs, "output": output_msgs}
+
+
+def _embed_inputs_to_messages(span_attrs: dict) -> Optional[list]:
+    """Project Vercel embedding-span inputs into canonical user-text messages.
+
+    ``ai.value`` (singular, on ``ai.embed``) is the raw string being embedded.
+    ``ai.values`` (string-array, on ``ai.embedMany`` and the inner
+    ``*.doEmbed`` provider calls) is one entry per text being embedded; each
+    entry is JSON.stringify-encoded by Vercel to fit OTel's string-array
+    constraint, so unwrap when the entry parses back to a string and fall
+    through to the raw value otherwise.
+    """
+    value = span_attrs.get("ai.value")
+    if isinstance(value, str) and value:
+        return [text_message("user", value)]
+    values = span_attrs.get("ai.values")
+    if isinstance(values, (list, tuple)) and values:
+        out: list = []
+        for entry in values:
+            if not isinstance(entry, str):
+                text = _stringify_embed_entry(entry)
+                if text:
+                    out.append(text_message("user", text))
+                continue
+            parsed = safe_json_parse(entry)
+            text = parsed if isinstance(parsed, str) else entry
+            if text:
+                out.append(text_message("user", text))
+        return out or None
+    return None
+
+
+def _stringify_embed_entry(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    try:
+        import json as _json
+        return _json.dumps(v)
+    except Exception:
+        return str(v)
+
+
+def _unpack_ai_prompt_blob(raw: str) -> Optional[list]:
+    """Vercel AI's outer agent spans (``ai.streamText`` / ``ai.generateText`` /
+    ``ai.streamObject`` / ``ai.generateObject``) emit the full prompt as a
+    single JSON blob in ``ai.prompt`` rather than indexed
+    ``ai.prompt.messages.*``. Shape: ``{system?: str, messages: [{role,
+    content: ...}, ...]}``. Unpack it so the system instruction becomes a
+    leading system message and the inner messages route through the
+    OpenAI/Vercel-shape coercer (which already understands ``tool-call`` /
+    ``tool-result`` Vercel content parts).
+    """
+    parsed = safe_json_parse(raw)
+    if not isinstance(parsed, dict):
+        return None
+    messages = parsed.get("messages")
+    if not isinstance(messages, list):
+        return None
+    out: list = []
+    system = parsed.get("system")
+    if isinstance(system, str) and system:
+        out.append(text_message("system", system))
+    coerced = coerce_to_messages(messages)
+    if coerced:
+        out.extend(coerced)
+    return out or None
 
 
 def _parse_vercel_tool_calls(raw: Any) -> list:
