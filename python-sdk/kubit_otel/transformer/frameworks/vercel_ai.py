@@ -61,9 +61,13 @@ INPUT_COST_ATTRS: tuple[str, ...] = ()
 OUTPUT_COST_ATTRS: tuple[str, ...] = ()
 TOTAL_COST_ATTRS: tuple[str, ...] = ()
 
-SESSION_ID_ATTRS: tuple[str, ...] = ()
-USER_ID_ATTRS: tuple[str, ...] = ()
-TAGS_ATTRS: tuple[str, ...] = ()
+# Vercel exposes ``experimental_telemetry: { metadata: { sessionId, userId,
+# tags } }`` on every ``ai.*`` call; the SDK flattens that map into
+# ``ai.telemetry.metadata.<key>`` span attributes verbatim. ``tags`` arrives
+# as a string-array, which core's ``first_attr`` returns as-is.
+SESSION_ID_ATTRS = ("ai.telemetry.metadata.sessionId",)
+USER_ID_ATTRS = ("ai.telemetry.metadata.userId",)
+TAGS_ATTRS = ("ai.telemetry.metadata.tags",)
 
 TIME_TO_FIRST_TOKEN_ATTRS: tuple[str, ...] = ()
 TOOL_CALLS_ATTRS: tuple[str, ...] = ()

@@ -18,7 +18,10 @@ Payload mapping in Langfuse is designed to support multiple legacy instrumentati
 | :---- | :---- | :---- |
 | `langfuse.observation.type` | `gen_ai.operation.name` | Observation type (`span`, `generation`, `event`). |
 | `langfuse.trace.name` | Span Name of the Root Span | Trace name. |
-| `langfuse.session.id` | `session.id` | Trace `sessionId`. |
+| `langfuse.session.id` | `session.id` | Trace `sessionId`. Highest-priority alias for the canonical `session_id` field. |
+| `langfuse.user.id` | `enduser.id` | Trace `userId`. Highest-priority alias for the canonical `user_id` field. |
+| `langfuse.{trace,observation}.metadata.sessionId` | (no OTel equivalent) | Fallback session id, surfaced when callers stuff session into the metadata bag (e.g. `updateActiveObservation({ metadata: { sessionId } })`) instead of using the trace-level setter. The kubit-otel `langfuse` adapter promotes both keys to top-level `session_id` and *also* keeps them under `metadata.sessionId` (additive, not a replacement). |
+| `langfuse.{trace,observation}.metadata.userId` | (no OTel equivalent) | Fallback user id, same semantics as the `sessionId` row above. Surfaced as top-level `user_id` and retained under `metadata.userId`. |
 | `langfuse.observation.input` | `gen_ai.prompt` / `input.value` | Observation input. |
 | `langfuse.observation.output` | `gen_ai.completion` / `output.value` | Observation output. |
 | `langfuse.observation.model.name` | `gen_ai.request.model` / `llm.model_name` | Observation model. |

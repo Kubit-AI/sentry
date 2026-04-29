@@ -94,6 +94,13 @@ export const adapter = makeAdapter({
   PROVIDER_ATTRS: ["ai.model.provider"],
   TOOL_NAME_ATTRS: ["ai.toolCall.name"],
   AGENT_NAME_ATTRS: ["ai.telemetry.functionId"],
+  // Vercel exposes `experimental_telemetry: { metadata: { sessionId, userId,
+  // tags } }` on every `ai.*` call; the SDK flattens that map into
+  // `ai.telemetry.metadata.<key>` span attributes verbatim. `tags` arrives
+  // as a string-array, which core's `firstAttr` returns as-is.
+  SESSION_ID_ATTRS: ["ai.telemetry.metadata.sessionId"],
+  USER_ID_ATTRS: ["ai.telemetry.metadata.userId"],
+  TAGS_ATTRS: ["ai.telemetry.metadata.tags"],
   buildParams(attrs, merged) {
     for (const [srcAttr, canonicalKey] of AI_REQUEST_PARAM_MAP) {
       const val = attrs[srcAttr];

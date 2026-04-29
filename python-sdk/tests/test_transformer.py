@@ -550,6 +550,74 @@ class TestLangfuseMetadataPromotion:
         assert obs["metadata"]["retry"] == "2"
 
 
+class TestLangfuseSessionAndUserAliases:
+    """Session/user aliases across the trace-setter form and metadata-bag fallbacks."""
+
+    def test_trace_setter_form_takes_priority(self):
+        # ``langfuse.session.id`` / ``langfuse.user.id`` are highest-priority;
+        # the metadata-bag forms in the same span must lose to them.
+        span = _mock_span(
+            parent_span_id=None,
+            attributes={
+                "langfuse.session.id": "sess-canonical",
+                "langfuse.user.id": "user-canonical",
+                "langfuse.trace.metadata.sessionId": "sess-trace-meta",
+                "langfuse.trace.metadata.userId": "user-trace-meta",
+                "langfuse.observation.metadata.sessionId": "sess-obs-meta",
+                "langfuse.observation.metadata.userId": "user-obs-meta",
+            },
+        )
+        records = transform_spans([span], "wid", "claim")
+        [obs] = _observations(records)
+        trace = _trace(records)
+        assert obs["session_id"] == "sess-canonical"
+        assert obs["user_id"] == "user-canonical"
+        assert trace["session_id"] == "sess-canonical"
+        assert trace["user_id"] == "user-canonical"
+
+    def test_observation_metadata_form_falls_back_when_canonical_absent(self):
+        # The Langfuse JS SDK v4 ``updateActiveObservation({ metadata: {
+        # sessionId, userId } })`` pattern: session/user only present under
+        # ``langfuse.observation.metadata.*``. Both surface as top-level
+        # session_id/user_id AND remain in the metadata bag (additive).
+        span = _mock_span(
+            parent_span_id=None,
+            attributes={
+                "langfuse.observation.metadata.sessionId": "291ad01d-33d4-4e25-a314-1027d599a37d",
+                "langfuse.observation.metadata.userId": "21",
+            },
+        )
+        records = transform_spans([span], "wid", "claim")
+        [obs] = _observations(records)
+        trace = _trace(records)
+        assert obs["session_id"] == "291ad01d-33d4-4e25-a314-1027d599a37d"
+        assert obs["user_id"] == "21"
+        assert trace["session_id"] == "291ad01d-33d4-4e25-a314-1027d599a37d"
+        assert trace["user_id"] == "21"
+        # Additive: metadata still carries the un-prefixed keys.
+        assert obs["metadata"]["sessionId"] == "291ad01d-33d4-4e25-a314-1027d599a37d"
+        assert obs["metadata"]["userId"] == "21"
+
+    def test_trace_metadata_form_beats_observation_metadata_form(self):
+        # ``langfuse.trace.metadata.*`` is semantically closer to the trace-level
+        # setter than ``langfuse.observation.metadata.*``, so when both are
+        # present (e.g. a child span inherited the trace-level setter under the
+        # trace.metadata prefix while also recording observation-level metadata),
+        # the trace-scoped one wins.
+        span = _mock_span(
+            parent_span_id=None,
+            attributes={
+                "langfuse.trace.metadata.sessionId": "sess-trace",
+                "langfuse.trace.metadata.userId": "user-trace",
+                "langfuse.observation.metadata.sessionId": "sess-obs",
+                "langfuse.observation.metadata.userId": "user-obs",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["session_id"] == "sess-trace"
+        assert obs["user_id"] == "user-trace"
+
+
 class TestGenAiSpanEvents:
     """OTel GenAI semconv 2024+ stores conversation messages as span events
     rather than flattened attributes. The transformer must fall back to
@@ -662,6 +730,30 @@ class TestVercelAiSdk:
         assert usage["input"] == 704
         assert usage["output"] == 17
         assert usage["total"] == 721
+
+    def test_telemetry_metadata_populates_session_user_tags(self):
+        # Vercel exposes ``experimental_telemetry: { metadata: { sessionId,
+        # userId, tags } }`` on every ``ai.*`` call; the SDK flattens that map
+        # into ``ai.telemetry.metadata.<key>`` span attributes.
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.generateText",
+                "ai.telemetry.functionId": "intent-classification",
+                "ai.telemetry.metadata.sessionId": "a70e6ac1-3cb9-4a63-abbf-d4bd76033cba",
+                "ai.telemetry.metadata.userId": "44",
+                "ai.telemetry.metadata.tags": ["chatbot", "routing"],
+            },
+        )
+        records = transform_spans([span], "wid", "claim")
+        [obs] = _observations(records)
+        trace = _trace(records)
+        assert obs["session_id"] == "a70e6ac1-3cb9-4a63-abbf-d4bd76033cba"
+        assert obs["user_id"] == "44"
+        assert obs["tags"] == ["chatbot", "routing"]
+        assert trace["session_id"] == "a70e6ac1-3cb9-4a63-abbf-d4bd76033cba"
+        assert trace["user_id"] == "44"
+        assert trace["tags"] == ["chatbot", "routing"]
 
     def test_tool_call_maps_to_tool(self):
         span = _mock_span(

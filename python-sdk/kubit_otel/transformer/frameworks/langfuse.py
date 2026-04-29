@@ -59,8 +59,27 @@ TOTAL_COST_ATTRS = (
     "langfuse.observation.total_cost",
 )
 
-SESSION_ID_ATTRS = ("langfuse.session.id",)
-USER_ID_ATTRS = ("langfuse.user.id",)
+# Session/user resolution priority:
+#   1. ``langfuse.session.id`` / ``langfuse.user.id`` — the v3/v4 trace-level
+#      setter form (``updateActiveTrace({ sessionId, userId })``).
+#   2. ``langfuse.trace.metadata.{sessionId,userId}`` — caller passed them in
+#      trace-level metadata bag.
+#   3. ``langfuse.observation.metadata.{sessionId,userId}`` — caller passed
+#      them in observation-level metadata bag (e.g.
+#      ``updateActiveObservation({ metadata: { sessionId, userId } })``).
+# The metadata-prefixed forms also remain in ``metadata`` via
+# ``enrich_metadata`` — surfacing them as session_id/user_id is additive, not a
+# replacement.
+SESSION_ID_ATTRS = (
+    "langfuse.session.id",
+    "langfuse.trace.metadata.sessionId",
+    "langfuse.observation.metadata.sessionId",
+)
+USER_ID_ATTRS = (
+    "langfuse.user.id",
+    "langfuse.trace.metadata.userId",
+    "langfuse.observation.metadata.userId",
+)
 TAGS_ATTRS = ("langfuse.trace.tags",)
 
 TIME_TO_FIRST_TOKEN_ATTRS: tuple[str, ...] = ()

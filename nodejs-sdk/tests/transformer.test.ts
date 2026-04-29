@@ -678,6 +678,84 @@ describe("Langfuse metadata promotion", () => {
   });
 });
 
+describe("Langfuse session/user aliases", () => {
+  it("trace-setter form (langfuse.session.id / langfuse.user.id) takes priority", () => {
+    const records = transformSpans(
+      [
+        makeSpan({
+          attrs: {
+            "langfuse.session.id": "sess-canonical",
+            "langfuse.user.id": "user-canonical",
+            "langfuse.trace.metadata.sessionId": "sess-trace-meta",
+            "langfuse.trace.metadata.userId": "user-trace-meta",
+            "langfuse.observation.metadata.sessionId": "sess-obs-meta",
+            "langfuse.observation.metadata.userId": "user-obs-meta",
+          },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    const [obs] = observations(records);
+    const t = trace(records);
+    expect(obs.session_id).toBe("sess-canonical");
+    expect(obs.user_id).toBe("user-canonical");
+    expect(t.session_id).toBe("sess-canonical");
+    expect(t.user_id).toBe("user-canonical");
+  });
+
+  it("langfuse.observation.metadata.{sessionId,userId} fallback when canonical absent", () => {
+    // Langfuse JS SDK v4 `updateActiveObservation({ metadata: { sessionId,
+    // userId } })` pattern: session/user only present under
+    // `langfuse.observation.metadata.*`. Both surface as top-level
+    // session_id/user_id AND remain in the metadata bag (additive).
+    const records = transformSpans(
+      [
+        makeSpan({
+          attrs: {
+            "langfuse.observation.metadata.sessionId": "291ad01d-33d4-4e25-a314-1027d599a37d",
+            "langfuse.observation.metadata.userId": "21",
+          },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    const [obs] = observations(records);
+    const t = trace(records);
+    expect(obs.session_id).toBe("291ad01d-33d4-4e25-a314-1027d599a37d");
+    expect(obs.user_id).toBe("21");
+    expect(t.session_id).toBe("291ad01d-33d4-4e25-a314-1027d599a37d");
+    expect(t.user_id).toBe("21");
+    // Additive: metadata still carries the un-prefixed keys.
+    expect((obs.metadata as Record<string, unknown>).sessionId).toBe(
+      "291ad01d-33d4-4e25-a314-1027d599a37d",
+    );
+    expect((obs.metadata as Record<string, unknown>).userId).toBe("21");
+  });
+
+  it("langfuse.trace.metadata.* beats langfuse.observation.metadata.*", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.trace.metadata.sessionId": "sess-trace",
+              "langfuse.trace.metadata.userId": "user-trace",
+              "langfuse.observation.metadata.sessionId": "sess-obs",
+              "langfuse.observation.metadata.userId": "user-obs",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.session_id).toBe("sess-trace");
+    expect(obs.user_id).toBe("user-trace");
+  });
+});
+
 describe("GenAI span events", () => {
   it("assembles input from system/user message events", () => {
     const [obs] = observations(
@@ -836,6 +914,36 @@ describe("Vercel AI SDK", () => {
     expect(usage.input).toBe(704);
     expect(usage.output).toBe(17);
     expect(usage.total).toBe(721);
+  });
+
+  it("ai.telemetry.metadata.{sessionId,userId,tags} populate session_id/user_id/tags on both records", () => {
+    // Vercel exposes `experimental_telemetry: { metadata: { sessionId,
+    // userId, tags } }` on every `ai.*` call; the SDK flattens that map into
+    // `ai.telemetry.metadata.<key>` span attributes.
+    const records = transformSpans(
+      [
+        makeSpan({
+          scopeName: "ai",
+          attrs: {
+            "ai.operationId": "ai.generateText",
+            "ai.telemetry.functionId": "intent-classification",
+            "ai.telemetry.metadata.sessionId": "a70e6ac1-3cb9-4a63-abbf-d4bd76033cba",
+            "ai.telemetry.metadata.userId": "44",
+            "ai.telemetry.metadata.tags": ["chatbot", "routing"],
+          },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    const [obs] = observations(records);
+    const tr = trace(records);
+    expect(obs.session_id).toBe("a70e6ac1-3cb9-4a63-abbf-d4bd76033cba");
+    expect(obs.user_id).toBe("44");
+    expect(obs.tags).toEqual(["chatbot", "routing"]);
+    expect(tr.session_id).toBe("a70e6ac1-3cb9-4a63-abbf-d4bd76033cba");
+    expect(tr.user_id).toBe("44");
+    expect(tr.tags).toEqual(["chatbot", "routing"]);
   });
 
   it("maps ai.operationId=ai.toolCall to TOOL with tool_name/input/output", () => {
