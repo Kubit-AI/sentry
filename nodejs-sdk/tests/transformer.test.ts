@@ -477,10 +477,15 @@ describe("root + resource mapping", () => {
     expect((obs as Record<string, unknown>).trace_name).toBe("plan_trip");
   });
 
-  it("child span carries parent_observation_id; no trace record emitted", () => {
+  it("child span carries parent_observation_id when its parent is in the batch", () => {
     const records = transformSpans(
       [
         makeSpan({
+          spanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "span" },
+        }),
+        makeSpan({
+          spanId: "ccc0000000000000",
           parentSpanId: "bbb0000000000000",
           attrs: { "langfuse.observation.type": "span" },
         }),
@@ -488,11 +493,78 @@ describe("root + resource mapping", () => {
       "wid",
       "claim",
     );
-    const [obs] = observations(records);
-    expect((obs as Record<string, unknown>).parent_observation_id).toBe(
+    const child = observations(records).find((o) => o.id === "ccc0000000000000")!;
+    expect((child as Record<string, unknown>).parent_observation_id).toBe(
       "bbb0000000000000",
     );
-    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(0);
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+  });
+});
+
+describe("orphan-as-root (per-batch detection)", () => {
+  it("orphan span (parent absent from batch) is promoted to root", () => {
+    const records = transformSpans(
+      [
+        makeSpan({
+          traceId: "aaa00000000000000000000000000000",
+          spanId: "ccc0000000000000",
+          parentSpanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "generation" },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    const t = trace(records);
+    expect(t.id).toBe("aaa00000000000000000000000000000");
+    const [obs] = observations(records);
+    expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
+    expect((obs as Record<string, unknown>).trace_name).toBe("span");
+  });
+
+  it("child span is unchanged when its parent IS in the same batch", () => {
+    const parent = makeSpan({
+      traceId: "aaa00000000000000000000000000000",
+      spanId: "bbb0000000000000",
+      attrs: { "langfuse.observation.type": "span" },
+    });
+    const child = makeSpan({
+      traceId: "aaa00000000000000000000000000000",
+      spanId: "ccc0000000000000",
+      parentSpanId: "bbb0000000000000",
+      attrs: { "langfuse.observation.type": "generation" },
+    });
+    const records = transformSpans([parent, child], "wid", "claim");
+
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+    const obs = observations(records);
+    const childObs = obs.find((o) => o.id === "ccc0000000000000")!;
+    expect((childObs as Record<string, unknown>).parent_observation_id).toBe(
+      "bbb0000000000000",
+    );
+  });
+
+  it("multiple orphans sharing a trace_id collapse to a single trace record", () => {
+    const records = transformSpans(
+      [
+        makeSpan({
+          spanId: "ccc0000000000000",
+          parentSpanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "generation" },
+        }),
+        makeSpan({
+          spanId: "ddd0000000000000",
+          parentSpanId: "bbb0000000000000",
+          attrs: { "langfuse.observation.type": "generation" },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+    for (const obs of observations(records)) {
+      expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
+    }
   });
 });
 

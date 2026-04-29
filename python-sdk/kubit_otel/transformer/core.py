@@ -133,6 +133,13 @@ def transform_spans(
     now = now_iso()
     emitted_traces: set[str] = set()
 
+    # Orphan-as-root: a span whose parent isn't in this batch is treated as
+    # a root. Common cause is the HTTP/server parent being dropped upstream
+    # by the span filter. Per-batch only; no cross-batch state.
+    batch_span_ids: set[str] = {
+        format(s.context.span_id, "016x") for s in spans
+    }
+
     def _with_claim(rec: dict[str, Any]) -> dict[str, Any]:
         rec["_wid_claim"] = wid_claim
         return rec
@@ -154,7 +161,7 @@ def transform_spans(
             if span.parent and span.parent.span_id
             else None
         )
-        is_root = parent_id is None
+        is_root = parent_id is None or parent_id not in batch_span_ids
 
         start_iso = nanos_to_iso(span.start_time)
         end_iso = nanos_to_iso(span.end_time)
@@ -294,7 +301,7 @@ def transform_spans(
             "entity_type": "enriched_observation",
             "id": span_id,
             "trace_id": trace_id,
-            "parent_observation_id": parent_id,
+            "parent_observation_id": None if is_root else parent_id,
             "name": span.name,
             "type": obs_type,
             "project_id": wid,

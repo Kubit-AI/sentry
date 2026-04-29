@@ -379,18 +379,87 @@ class TestRootAndResourceMapping:
         assert obs["parent_observation_id"] is None
         assert obs["trace_name"] == "plan_trip"
 
-    def test_child_span_has_parent_observation_id(self):
+    def test_child_span_has_parent_observation_id_when_parent_in_batch(self):
+        parent = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xBBB,
+            attributes={"langfuse.observation.type": "span"},
+        )
         child = _mock_span(
             trace_id=0xAAA,
             span_id=0xCCC,
             parent_span_id=0xBBB,
             attributes={"langfuse.observation.type": "span"},
         )
-        records = transform_spans([child], "wid", "claim")
+        records = transform_spans([parent, child], "wid", "claim")
+        obs_by_id = {o["id"]: o for o in _observations(records)}
+        assert obs_by_id[format(0xCCC, "016x")]["parent_observation_id"] == format(
+            0xBBB, "016x"
+        )
+        # One trace record from the parent root, none synthesised for the child.
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+
+
+class TestOrphanAsRoot:
+    """A span whose parent is absent from the export batch is treated as a
+    trace root. This handles the common case where a server/HTTP parent span
+    was filtered out by ``is_default_export_span`` before the GenAI children
+    reached the exporter — without it, those children would carry a
+    ``parent_observation_id`` pointing at a span Kubit never sees.
+    """
+
+    def test_orphan_span_promoted_to_root(self):
+        span = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xCCC,
+            parent_span_id=0xBBB,
+            attributes={"langfuse.observation.type": "generation"},
+        )
+        records = transform_spans([span], "wid", "claim")
+        trace = _trace(records)
+        assert trace["id"] == format(0xAAA, "032x")
         [obs] = _observations(records)
-        assert obs["parent_observation_id"] == format(0xBBB, "016x")
-        # No trace record emitted for non-root spans.
-        assert not [r for r in records if r["entity_type"] == "trace"]
+        assert obs["parent_observation_id"] is None
+        assert obs["trace_name"] == "span"
+
+    def test_child_unchanged_when_parent_in_same_batch(self):
+        parent = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xBBB,
+            attributes={"langfuse.observation.type": "span"},
+        )
+        child = _mock_span(
+            trace_id=0xAAA,
+            span_id=0xCCC,
+            parent_span_id=0xBBB,
+            attributes={"langfuse.observation.type": "generation"},
+        )
+        records = transform_spans([parent, child], "wid", "claim")
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+        obs = {o["id"]: o for o in _observations(records)}
+        assert obs[format(0xCCC, "016x")]["parent_observation_id"] == format(
+            0xBBB, "016x"
+        )
+
+    def test_multiple_orphans_same_trace_emit_one_trace(self):
+        spans = [
+            _mock_span(
+                trace_id=0xAAA,
+                span_id=0xCCC,
+                parent_span_id=0xBBB,
+                attributes={"langfuse.observation.type": "generation"},
+            ),
+            _mock_span(
+                trace_id=0xAAA,
+                span_id=0xDDD,
+                parent_span_id=0xBBB,
+                attributes={"langfuse.observation.type": "generation"},
+            ),
+        ]
+        records = transform_spans(spans, "wid", "claim")
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+        for obs in _observations(records):
+            assert obs["parent_observation_id"] is None
 
 
 class TestObservationTypePassThrough:
