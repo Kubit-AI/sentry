@@ -116,8 +116,24 @@ def is_known_llm_instrumentor(span: ReadableSpan) -> bool:
     )
 
 
+def is_langgraph_internal_span(span: ReadableSpan) -> bool:
+    """Return whether the span is a LangGraph Pregel runtime coordination span.
+
+    LangGraph emits ``ChannelWrite<...>`` spans around every node transition
+    plus ``__start__`` / ``__end__`` pseudo-nodes. They carry no LLM payload
+    and Langfuse hides them at the UI layer; the default Kubit filter drops
+    them on ingest so the trace tree matches Langfuse's view.
+    """
+    name = getattr(span, "name", None)
+    if not isinstance(name, str):
+        return False
+    return name.startswith("ChannelWrite") or name in ("__start__", "__end__")
+
+
 def is_default_export_span(span: ReadableSpan) -> bool:
     """Default Kubit export predicate — keeps LLM-relevant spans only."""
+    if is_langgraph_internal_span(span):
+        return False
     return (
         is_kubit_span(span)
         or is_genai_span(span)
