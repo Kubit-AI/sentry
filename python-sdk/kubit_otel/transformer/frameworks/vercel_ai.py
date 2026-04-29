@@ -281,7 +281,12 @@ def _embed_inputs_to_messages(span_attrs: dict) -> Optional[list]:
     """
     value = span_attrs.get("ai.value")
     if isinstance(value, str) and value:
-        return [text_message("user", value)]
+        # Vercel JSON.stringify-encodes ``ai.value`` too (not only ``ai.values``
+        # entries). Unwrap when it parses back to a string; fall through to the
+        # raw value when it doesn't (defensive for upstreams that emit bare).
+        parsed = safe_json_parse(value)
+        text = parsed if isinstance(parsed, str) else value
+        return [text_message("user", text)]
     values = span_attrs.get("ai.values")
     if isinstance(values, (list, tuple)) and values:
         out: list = []

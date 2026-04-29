@@ -902,6 +902,28 @@ describe("vercelAi normalizer", () => {
     expect(r.usage_details).toEqual({ input: 12, total: 12 });
   });
 
+  it("ai.embed unwraps JSON.stringify-encoded ai.value", () => {
+    // Vercel emits ai.value as JSON.stringify(input), so the literal value
+    // arriving on the span is `"\"actual text\""` (with quote chars). Must
+    // unwrap to canonical text without the surrounding quotes.
+    const attrs: Record<string, unknown> = {
+      "ai.operationId": "ai.embed",
+      "ai.value": '"Who do I admire the most among tennis athletes?"',
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.input).toEqual([
+      {
+        role: "user",
+        parts: [
+          {
+            type: "text",
+            content: "Who do I admire the most among tennis athletes?",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("ai.embedMany handles non-JSON entries by passing them through as text", () => {
     // Defensive: if an upstream emits already-decoded strings (no JSON
     // escaping), keep them verbatim instead of producing null parts.

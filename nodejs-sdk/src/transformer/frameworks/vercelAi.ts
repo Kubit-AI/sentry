@@ -236,7 +236,12 @@ function embedInputsToMessages(
 ): Message[] | null {
   const value = attrs["ai.value"];
   if (typeof value === "string" && value.length > 0) {
-    return [textMessage("user", value)];
+    // Vercel JSON.stringify-encodes ``ai.value`` too (not only ``ai.values``
+    // entries). Unwrap when it parses back to a string; fall through to the
+    // raw value when it doesn't (defensive for upstreams that emit bare).
+    const parsed = safeJsonParse(value);
+    const text = typeof parsed === "string" ? parsed : value;
+    return [textMessage("user", text)];
   }
   const values = attrs["ai.values"];
   if (Array.isArray(values) && values.length > 0) {

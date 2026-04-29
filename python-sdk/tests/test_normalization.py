@@ -832,6 +832,27 @@ class TestVercelAiNormalizer:
         ]
         assert r["usage_details"] == {"input": 12, "total": 12}
 
+    def test_ai_embed_unwraps_json_stringified_ai_value(self):
+        # Vercel emits ai.value as JSON.stringify(input), so the literal
+        # value arriving on the span is ``"\"actual text\""`` (with quote
+        # chars). Must unwrap to canonical text without surrounding quotes.
+        span = _mock_span(attrs={
+            "ai.operationId": "ai.embed",
+            "ai.value": '"Who do I admire the most among tennis athletes?"',
+        })
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "text",
+                        "content": "Who do I admire the most among tennis athletes?",
+                    }
+                ],
+            }
+        ]
+
     def test_ai_embed_many_handles_non_json_entries_as_text(self):
         # Defensive: if an upstream emits already-decoded strings (no JSON
         # escaping), keep them verbatim instead of producing empty parts.
