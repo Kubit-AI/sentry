@@ -575,11 +575,27 @@ def _unwrap_langchain_envelope(value: Any) -> Optional[list]:
     # ``langgraph.types.Command`` is the standard return value for nodes that
     # steer the graph plus update state. OpenInference serializes it as
     # ``{graph: ..., update: <state-delta>, resume: ..., goto: <node>}``.
-    # Recurse into ``update`` so an inner ``messages`` list is reachable; if
-    # the state-delta uses an app-specific key (``researcher_messages`` etc.)
-    # the recursion returns None and the caller falls through.
+    # First try the standard recursion (handles the default ``MessagesState``
+    # with key ``messages`` plus the existing ``output``/``input`` paths).
     if "goto" in value and isinstance(value.get("update"), dict):
-        return _unwrap_langchain_envelope(value["update"])
+        update = value["update"]
+        standard = _unwrap_langchain_envelope(update)
+        if standard is not None:
+            return standard
+        # Multi-agent / custom-state LangGraph apps rename their message
+        # channels (``researcher_messages``, ``supervisor_messages``,
+        # ``chat_history``, …). Walk every value of ``update`` and collect any
+        # list-of-messages we recognise; non-message values (scalars, lists of
+        # plain strings) drop through to None and are ignored. Channels are
+        # concatenated in dict-insertion order (stable across CPython 3.7+
+        # and V8 string-keyed objects).
+        collected: list = []
+        for v in update.values():
+            if isinstance(v, (dict, list)):
+                sub = _unwrap_langchain_envelope(v)
+                if sub:
+                    collected.extend(sub)
+        return collected if collected else None
     if _is_langchain_message_serializable(value):
         return [value]
     if _is_langchain_plain_dict_message(value):

@@ -524,8 +524,9 @@ class TestOpeninferenceLangchainEnvelope:
             ]},
         ]
 
-    # ``Command`` without an ``update.messages`` payload (pure routing) carries
-    # no canonical messages — return null rather than fabricating one.
+    # ``Command`` whose ``update`` is a state delta with no message-shaped
+    # values carries no canonical messages — return null rather than
+    # fabricating one. (Empty ``researcher_messages`` list, no other channels.)
     def test_command_envelope_without_messages_returns_null(self):
         span = _mock_span(attrs={
             "openinference.span.kind": "chain",
@@ -538,6 +539,79 @@ class TestOpeninferenceLangchainEnvelope:
         })
         r = _obs(_transform(span))
         assert r["output"] is None
+
+    # ``Command`` with a *custom* state-channel name (multi-agent LangGraph
+    # apps almost always rename their message channels — ``researcher_messages``,
+    # ``supervisor_messages``, ``chat_history``…). The default ``MessagesState``
+    # uses ``messages``, but every nontrivial graph customises it. The
+    # unwrapper should walk all values of ``update`` and pick up any list of
+    # LangChain messages, not only the ``messages`` key. Mirrors the
+    # ``researcher_tools`` ToolNode output shape we observed in deep_researcher
+    # traces — a ``ToolMessage`` carrying ``tool_call_id`` linkage that would
+    # otherwise be lost.
+    def test_unwraps_langgraph_command_with_custom_message_channel(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "chain",
+            "output.value": json.dumps({
+                "graph": None,
+                "update": {
+                    "researcher_messages": [
+                        {"type": "tool", "data": {
+                            "content": "Reflection recorded",
+                            "type": "tool",
+                            "name": "ResearchComplete",
+                            "tool_call_id": "call_ULHX17O2dpHDuDjzLlxZZFcP",
+                            "id": None,
+                        }},
+                    ],
+                },
+                "resume": None,
+                "goto": "compress_research",
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output"] == [
+            {
+                "role": "tool",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "response": "Reflection recorded",
+                    "id": "call_ULHX17O2dpHDuDjzLlxZZFcP",
+                }],
+                "name": "ResearchComplete",
+            },
+        ]
+
+    # When ``update`` mixes a message channel with non-message scalars
+    # (``notes`` is a plain string list in deep_researcher's
+    # ``supervisor_tools`` output), only the message channel is unwrapped —
+    # arbitrary scalars must not be text-wrapped into fake messages.
+    def test_command_envelope_picks_up_messages_alongside_scalar_state(self):
+        span = _mock_span(attrs={
+            "openinference.span.kind": "chain",
+            "output.value": json.dumps({
+                "graph": None,
+                "update": {
+                    "supervisor_messages": [
+                        {"type": "ai", "data": {
+                            "content": "Delegating to researcher.",
+                            "type": "ai",
+                            "id": "a1",
+                            "tool_calls": [],
+                        }},
+                    ],
+                    "notes": ["Reflection recorded: ..."],  # plain strings, must be ignored
+                },
+                "resume": None,
+                "goto": "supervisor",
+            }),
+        })
+        r = _obs(_transform(span))
+        assert r["output"] == [
+            {"role": "assistant", "parts": [
+                {"type": "text", "content": "Delegating to researcher."},
+            ]},
+        ]
 
     # Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing
     # ``{output:[{lg_name:"Send",...}]}``) used to be text-wrapped into a fake

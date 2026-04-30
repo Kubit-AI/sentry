@@ -680,17 +680,32 @@ function unwrapLangchainEnvelope(value: unknown): unknown[] | null {
   if (obj.outputs !== undefined) return unwrapLangchainEnvelope(obj.outputs);
   // `langgraph.types.Command` is the standard return value for nodes that
   // steer the graph plus update state. OpenInference serializes it as
-  // {graph: ..., update: <state-delta>, resume: ..., goto: <node>}. Recurse
-  // into `update` so an inner `messages` list is reachable; if the
-  // state-delta uses an app-specific key (`researcher_messages` etc.) the
-  // recursion returns null and the caller falls through.
+  // {graph: ..., update: <state-delta>, resume: ..., goto: <node>}. First try
+  // the standard recursion (handles the default `MessagesState` with key
+  // `messages` plus the existing `output` / `input` paths).
   if (
     "goto" in obj &&
     obj.update !== null &&
     typeof obj.update === "object" &&
     !Array.isArray(obj.update)
   ) {
-    return unwrapLangchainEnvelope(obj.update);
+    const update = obj.update as Record<string, unknown>;
+    const standard = unwrapLangchainEnvelope(update);
+    if (standard !== null) return standard;
+    // Multi-agent / custom-state LangGraph apps rename their message channels
+    // (`researcher_messages`, `supervisor_messages`, `chat_history`, …). Walk
+    // every value of `update` and collect any list-of-messages we recognise;
+    // non-message values (scalars, lists of plain strings) drop through to
+    // null and are ignored. Channels are concatenated in object-property
+    // insertion order (stable for string-keyed objects in V8 / spec).
+    const collected: unknown[] = [];
+    for (const v of Object.values(update)) {
+      if (v !== null && (typeof v === "object" || Array.isArray(v))) {
+        const sub = unwrapLangchainEnvelope(v);
+        if (sub) collected.push(...sub);
+      }
+    }
+    return collected.length > 0 ? collected : null;
   }
   if (isLangchainMessageSerializable(obj)) return [obj];
   if (isLangchainPlainDictMessage(obj)) return [obj];
