@@ -93,3 +93,18 @@ LangChain emits tool/function schemas as **indexed** `llm.tools.<n>.tool.json_sc
 ### Indexed-vs-blob precedence
 
 When BOTH indexed `llm.input_messages.<n>.message.*` AND a richer LangChain `input.value` blob are present (the common case for GENERATION spans), the LangChain blob wins. The indexed form is structurally degraded — assistant tool-call messages have `{role:"assistant", content:""}` only, with the actual `tool_use` data missing. The blob carries the full `tool_calls` array. Detection is shape-based: non-LangChain OpenInference users (whose blobs are not Serializable envelopes) get `null` from the LangChain branch and fall through to the unchanged existing cascade — **no behavior change for OpenAI / Phoenix / generic OpenInference users.**
+
+### Provided model from `llm.invocation_parameters`
+
+LangChain via OpenInference does not emit a separate `llm.request.model` attribute, so the OTel-spec request/response model split (`gen_ai.request.model` vs. `gen_ai.response.model`) would otherwise be lost — `llm.model_name` carries only the API-returned versioned name (`gpt-4.1-mini-2025-04-14`), and the user-requested name (`gpt-4.1-mini`) lives only inside the JSON-stringified `llm.invocation_parameters` blob. The adapter's `resolveProvidedModel` hook parses that blob and returns the first non-empty string at key `model` (OpenAI-canonical) or `model_name` (Anthropic / older chat models), populating the canonical `provided_model_name` field. Explicit `PROVIDED_MODEL_ATTRS` aliases (e.g. `llm.request.model` set by a collector enrichment processor) still win — the hook only fires after the alias chain misses.
+
+### Metadata blob (LangGraph routing context)
+
+OpenInference's Python LangChain instrumentor stamps each span with a single `metadata` attribute carrying a JSON-serialised dict of LangChain/LangGraph runtime context — `langgraph_node`, `langgraph_step`, `langgraph_path`, `langgraph_triggers`, `langgraph_checkpoint_ns`, `run_id`, `graph_id`, `thread_id`, `ls_provider`, `ls_model_name`, `ls_temperature`, `ls_max_tokens`, etc. Multi-agent graphs surface their routing topology here.
+
+The adapter does **not** unpack this blob into the canonical `metadata` field. Two reasons:
+
+- **Cardinality.** Per-span unique identifiers (`run_id`, `langgraph_checkpoint_ns`) would explode the metadata key space across a project, hurting query and aggregation performance on the canonical field.
+- **Vendor-specific keys.** `ls_*` and `langgraph_*` are LangChain/LangGraph-specific; promoting them wholesale to first-class metadata would mix vendor namespaces into a field that aggregates across frameworks.
+
+The blob is preserved verbatim under `attributes.span.metadata` on every observation, so consumers that need the routing context can parse it from there. Some keys overlap with first-class fields and are captured separately via dedicated paths: `thread_id` typically matches `session.id` (which feeds `session_id` via `SESSION_ID_ATTRS`), and `ls_model_name` matches the `model` key inside `llm.invocation_parameters` (which feeds `provided_model_name` via `resolveProvidedModel`). A future enhancement could selectively promote stable, low-cardinality keys (e.g. `langgraph_node` for routing analytics) but the current opt-out is intentional, not an oversight.
