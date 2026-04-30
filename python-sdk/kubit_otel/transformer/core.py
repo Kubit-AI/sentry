@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, Optional, Sequence
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -19,6 +20,7 @@ from .frameworks import (
     langfuse as _langfuse,
 )
 from .helpers import (
+    decode_json_string_attr,
     first_attr,
     merge_json_blob,
     nanos_to_iso,
@@ -100,6 +102,7 @@ SESSION_ID_ATTRS = _concat("SESSION_ID_ATTRS")
 USER_ID_ATTRS = _concat("USER_ID_ATTRS")
 TAGS_ATTRS = _concat("TAGS_ATTRS")
 TIME_TO_FIRST_TOKEN_ATTRS = _concat("TIME_TO_FIRST_TOKEN_ATTRS")
+TIME_TO_FIRST_TOKEN_SECONDS_ATTRS = _concat("TIME_TO_FIRST_TOKEN_SECONDS_ATTRS")
 TOOL_CALLS_ATTRS = _concat("TOOL_CALLS_ATTRS")
 TOOL_CALL_NAMES_ATTRS = _concat("TOOL_CALL_NAMES_ATTRS")
 TOOL_DEFINITIONS_ATTRS = _concat("TOOL_DEFINITIONS_ATTRS")
@@ -119,6 +122,47 @@ _RESOURCE_SERVICE_VERSION = "service.version"
 _RESOURCE_DEPLOYMENT_ENV = "deployment.environment"
 
 
+def _resolve_ttft_ms(
+    span_attrs: dict,
+    start_time_ns: Optional[int],
+    completion_start_time_iso: Any,
+) -> Optional[int]:
+    """Resolve ``time_to_first_token`` in canonical milliseconds (int).
+
+    Three-tier priority:
+      1. ms-typed aliases (e.g. Vercel ``ai.response.msToFirstChunk``)
+      2. seconds-typed aliases (e.g. OTel GenAI
+         ``gen_ai.response.time_to_first_chunk``), converted to ms via
+         float→round (``0.5`` → ``500``)
+      3. derived from ``completion_start_time − span.start_time`` for emitters
+         that record the first-chunk timestamp instead of a duration
+         (Langfuse). Negative diffs (clock skew / instrumentation bug) clamp
+         to 0.
+
+    Direct measurements win over derivation because instrumentations
+    typically record the duration with higher precision than the
+    round-tripped timestamp.
+    """
+    ms = safe_int(first_attr(span_attrs, TIME_TO_FIRST_TOKEN_ATTRS))
+    if ms is not None:
+        return ms
+    seconds = safe_float(first_attr(span_attrs, TIME_TO_FIRST_TOKEN_SECONDS_ATTRS))
+    if seconds is not None:
+        return round(seconds * 1000)
+    if isinstance(completion_start_time_iso, str) and start_time_ns is not None:
+        try:
+            dt = datetime.fromisoformat(
+                completion_start_time_iso.replace("Z", "+00:00")
+            )
+        except (ValueError, TypeError):
+            return None
+        completion_ms = dt.timestamp() * 1000
+        start_ms = start_time_ns / 1_000_000
+        diff = round(completion_ms - start_ms)
+        return max(0, diff)
+    return None
+
+
 def transform_spans(
     spans: Sequence[ReadableSpan],
     wid: str,
@@ -133,12 +177,13 @@ def transform_spans(
     now = now_iso()
     emitted_traces: set[str] = set()
 
-    # Orphan-as-root: a span whose parent isn't in this batch is treated as
-    # a root. Common cause is the HTTP/server parent being dropped upstream
-    # by the span filter. Per-batch only; no cross-batch state.
-    batch_span_ids: set[str] = {
-        format(s.context.span_id, "016x") for s in spans
-    }
+    # Root detection is purely OTel-local: a span is a root when its OTel
+    # parent context is empty. Cross-batch flushing is the norm — short
+    # children commonly end (and flush) before their long-running parent —
+    # so a per-batch "parent not in this batch" check would misclassify
+    # those as roots and emit duplicate ``trace`` rows. Surviving children
+    # of a filtered HTTP/server parent will carry a dangling
+    # ``parent_observation_id`` until ingestion-side reconciliation clears it.
 
     def _with_claim(rec: dict[str, Any]) -> dict[str, Any]:
         rec["_wid_claim"] = wid_claim
@@ -161,7 +206,7 @@ def transform_spans(
             if span.parent and span.parent.span_id
             else None
         )
-        is_root = parent_id is None or parent_id not in batch_span_ids
+        is_root = parent_id is None
 
         start_iso = nanos_to_iso(span.start_time)
         end_iso = nanos_to_iso(span.end_time)
@@ -237,7 +282,7 @@ def transform_spans(
 
         # ── Enriched observation record (every span) ─────────────────────
         model = first_attr(span_attrs, MODEL_ATTRS)
-        provided_model_name = first_attr(span_attrs, PROVIDED_MODEL_ATTRS)
+        provided_model_name = _resolve_provided_model(span_attrs)
         input_text = _resolve_input(span_attrs) or event_input
         output_text = _resolve_output(span_attrs) or event_output
         input_tokens = safe_int(first_attr(span_attrs, INPUT_TOKENS_ATTRS))
@@ -296,12 +341,15 @@ def transform_spans(
         model_parameters = _build_model_parameters(span_attrs)
         obs_type = _resolve_observation_type(span, span_attrs, model)
         provider = _resolve_provider(span_attrs)
+        completion_start_time = decode_json_string_attr(
+            first_attr(span_attrs, _langfuse.COMPLETION_START_ATTRS)
+        )
 
         records.append(_with_claim({
             "entity_type": "enriched_observation",
             "id": span_id,
             "trace_id": trace_id,
-            "parent_observation_id": None if is_root else parent_id,
+            "parent_observation_id": parent_id,
             "name": span.name,
             "type": obs_type,
             "project_id": wid,
@@ -316,9 +364,11 @@ def transform_spans(
             "release": service_version,
             "start_time": start_iso,
             "end_time": end_iso,
-            "completion_start_time": first_attr(span_attrs, _langfuse.COMPLETION_START_ATTRS),
+            "completion_start_time": completion_start_time,
             "latency": latency_ms,
-            "time_to_first_token": safe_int(first_attr(span_attrs, TIME_TO_FIRST_TOKEN_ATTRS)),
+            "time_to_first_token": _resolve_ttft_ms(
+                span_attrs, span.start_time, completion_start_time
+            ),
             "model": model,
             "provided_model_name": provided_model_name,
             "internal_model_id": None,
@@ -474,6 +524,28 @@ def _resolve_provider(span_attrs: dict) -> Optional[str]:
         if val is None:
             continue
         return val if isinstance(val, str) else str(val)
+    return None
+
+
+def _resolve_provided_model(span_attrs: dict) -> Optional[str]:
+    """Return the user-requested model name (OTel ``gen_ai.request.model``).
+
+    Explicit ``PROVIDED_MODEL_ATTRS`` aliases fire first — an explicitly-set
+    request-model attribute wins over inferred extraction. If the alias
+    chain misses, framework ``resolve_provided_model`` hooks pull from
+    blob-form sources (e.g. OpenInference's ``llm.invocation_parameters``,
+    where LangChain hides the requested model name).
+    """
+    val = first_attr(span_attrs, PROVIDED_MODEL_ATTRS)
+    if val is not None:
+        return val if isinstance(val, str) else str(val)
+    for fw in FRAMEWORKS:
+        resolve = getattr(fw, "resolve_provided_model", None)
+        if resolve is None:
+            continue
+        resolved = resolve(span_attrs)
+        if resolved:
+            return resolved
     return None
 
 

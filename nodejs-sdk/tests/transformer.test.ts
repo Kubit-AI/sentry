@@ -324,6 +324,280 @@ describe("Langfuse provider/model alias coverage", () => {
   });
 });
 
+describe("time_to_first_token", () => {
+  // Canonical unit is milliseconds (int). Vercel AI emits ms directly under
+  // `ai.response.msToFirstChunk` (and legacy `ai.stream.msToFirstChunk` for
+  // pre-AI-SDK-4.0). OTel GenAI semconv emits seconds (float) under
+  // `gen_ai.response.time_to_first_chunk`. Core converts seconds→ms via
+  // float→round.
+
+  it("reads ai.response.msToFirstChunk verbatim (Vercel AI, ms)", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.response.msToFirstChunk": 423,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(423);
+  });
+
+  it("reads legacy ai.stream.msToFirstChunk", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.stream.msToFirstChunk": 312,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(312);
+  });
+
+  it("converts gen_ai.response.time_to_first_chunk seconds to ms", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "gen_ai.response.time_to_first_chunk": 0.5,
+              "gen_ai.system": "openai",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(500);
+  });
+
+  it("rounds sub-millisecond seconds via Math.round", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "gen_ai.response.time_to_first_chunk": 0.0023,
+              "gen_ai.system": "openai",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(2);
+  });
+
+  it("ms-typed alias wins when both present", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.response.msToFirstChunk": 100,
+              "gen_ai.response.time_to_first_chunk": 9.0,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(100);
+  });
+
+  it("returns null when no TTFT alias is present", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: { "langfuse.observation.type": "generation" },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBeNull();
+  });
+
+  // Langfuse records the first-chunk timestamp under
+  // `langfuse.observation.completion_start_time` rather than a TTFT duration.
+  // Derive ms = completion_start_time − span.startTime when no direct alias
+  // is present.
+  it("derives TTFT from Langfuse completion_start_time minus start", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.completion_start_time": JSON.stringify(
+                "2023-11-14T22:13:21.285Z",
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(1285);
+  });
+
+  it("ms alias beats Langfuse derivation", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.response.msToFirstChunk": 42,
+              "langfuse.observation.completion_start_time":
+                "2023-11-14T22:13:21.285Z",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(42);
+  });
+
+  it("clamps negative diff to 0", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_001, 0],
+            endTime: [1_700_000_002, 0],
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.completion_start_time":
+                "2023-11-14T22:13:20.000Z",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(0);
+  });
+
+  it("returns null when completion_start_time is unparseable", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.completion_start_time": "not-an-iso-date",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBeNull();
+  });
+});
+
+describe("Langfuse completion_start_time", () => {
+  // Langfuse JSON-stringifies non-string values (e.g. `Date`) before storing
+  // them as OTel string attributes, so an ISO timestamp arrives as the literal
+  // characters `"2026-04-30T..."` (quote chars included). Verify the
+  // transformer unwraps the JSON quoting.
+  it("unwraps a JSON-encoded ISO timestamp", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.model.name": "gpt-4o",
+              "langfuse.observation.completion_start_time": JSON.stringify(
+                "2026-04-30T15:14:10.094Z",
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.completion_start_time).toBe("2026-04-30T15:14:10.094Z");
+  });
+
+  it("passes plain ISO strings through unchanged", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.model.name": "gpt-4o",
+              "langfuse.observation.completion_start_time":
+                "2026-04-30T15:14:10.094Z",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.completion_start_time).toBe("2026-04-30T15:14:10.094Z");
+  });
+
+  it("returns null when the attribute is absent", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.model.name": "gpt-4o",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.completion_start_time).toBeNull();
+  });
+});
+
 describe("JSON blob robustness", () => {
   it("malformed usage_details JSON is ignored", () => {
     const [obs] = observations(
@@ -501,8 +775,12 @@ describe("root + resource mapping", () => {
   });
 });
 
-describe("orphan-as-root (per-batch detection)", () => {
-  it("orphan span (parent absent from batch) is promoted to root", () => {
+describe("root detection (OTel-local only)", () => {
+  it("span with a parent ID always carries it through, never promoted to root", () => {
+    // Cross-batch case: the parent span is being flushed in a later batch
+    // (or was filtered out upstream). Either way the SDK leaves
+    // `parent_observation_id` pointing at the real OTel span ID and lets
+    // ingestion reconcile when (or whether) the parent arrives.
     const records = transformSpans(
       [
         makeSpan({
@@ -515,11 +793,12 @@ describe("orphan-as-root (per-batch detection)", () => {
       "wid",
       "claim",
     );
-    const t = trace(records);
-    expect(t.id).toBe("aaa00000000000000000000000000000");
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(0);
     const [obs] = observations(records);
-    expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
-    expect((obs as Record<string, unknown>).trace_name).toBe("span");
+    expect((obs as Record<string, unknown>).parent_observation_id).toBe(
+      "bbb0000000000000",
+    );
+    expect((obs as Record<string, unknown>).trace_name).toBeNull();
   });
 
   it("child span is unchanged when its parent IS in the same batch", () => {
@@ -544,7 +823,11 @@ describe("orphan-as-root (per-batch detection)", () => {
     );
   });
 
-  it("multiple orphans sharing a trace_id collapse to a single trace record", () => {
+  it("only OTel-rootless spans emit a trace record", () => {
+    // Two spans both have a parent, neither is a true OTel root → no trace
+    // record is emitted from this batch. If their real parent ever arrives
+    // it will emit the trace. If it never does (parent was filtered),
+    // ingestion-side reconciliation handles the orphan tree.
     const records = transformSpans(
       [
         makeSpan({
@@ -561,9 +844,12 @@ describe("orphan-as-root (per-batch detection)", () => {
       "wid",
       "claim",
     );
-    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(0);
     for (const obs of observations(records)) {
-      expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
+      expect((obs as Record<string, unknown>).parent_observation_id).toBe(
+        "bbb0000000000000",
+      );
+      expect((obs as Record<string, unknown>).trace_name).toBeNull();
     }
   });
 });

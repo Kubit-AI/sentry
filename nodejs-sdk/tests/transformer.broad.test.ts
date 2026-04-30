@@ -239,6 +239,101 @@ describe("OpenInference schema", () => {
     expect(obs.model_parameters).toEqual({ temperature: 0.1, max_tokens: 1000 });
   });
 
+  // The OTel GenAI semconv mandates a request/response model split.
+  // OpenInference's LangChain instrumentor doesn't emit `llm.request.model`;
+  // the user-requested model is buried inside the JSON-stringified
+  // `llm.invocation_parameters` blob (key `model`). `llm.model_name` carries
+  // the API-returned versioned name. Without extracting from the blob,
+  // `provided_model_name` is null and the request/response split is lost.
+  it("extracts provided_model_name from llm.invocation_parameters.model", () => {
+    const a = attrs();
+    a["llm.model_name"] = "gpt-4.1-mini-2025-04-14";
+    a["llm.invocation_parameters"] = JSON.stringify({
+      model: "gpt-4.1-mini",
+      model_name: "gpt-4.1-mini",
+      stream: false,
+    });
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@arizeai/openinference-instrumentation-langchain",
+            attrs: a,
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.model).toBe("gpt-4.1-mini-2025-04-14");
+    expect(obs.provided_model_name).toBe("gpt-4.1-mini");
+  });
+
+  // Some LangChain providers populate `model_name` in invocation_parameters
+  // but not the OpenAI-canonical `model` key. Both should be probed.
+  it("extracts provided_model_name falling back to model_name key", () => {
+    const a = attrs();
+    a["llm.invocation_parameters"] = JSON.stringify({
+      model_name: "claude-3-5-sonnet",
+      max_tokens: 1024,
+    });
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@arizeai/openinference-instrumentation-langchain",
+            attrs: a,
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provided_model_name).toBe("claude-3-5-sonnet");
+  });
+
+  // Defensive: an invocation_parameters blob without a model key should
+  // yield null, not crash or return junk.
+  it("provided_model_name is null when invocation_parameters has no model key", () => {
+    const a = attrs();
+    a["llm.invocation_parameters"] = JSON.stringify({ temperature: 0.1 });
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@arizeai/openinference-instrumentation-langchain",
+            attrs: a,
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provided_model_name).toBeNull();
+  });
+
+  // Explicit `llm.request.model` (e.g. set by a custom collector enrichment
+  // processor) wins over the blob-derived value — explicit alias has
+  // priority over inferred extraction.
+  it("explicit llm.request.model wins over invocation_parameters.model", () => {
+    const a = attrs();
+    (a as Record<string, unknown>)["llm.request.model"] = "explicit-request-model";
+    a["llm.invocation_parameters"] = JSON.stringify({ model: "blob-model" });
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@arizeai/openinference-instrumentation-langchain",
+            attrs: a,
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provided_model_name).toBe("explicit-request-model");
+  });
+
   it("captures llm.cost.* as cost_details", () => {
     const [obs] = observations(
       transformSpans([makeSpan({ attrs: attrs() })], "wid", "claim"),
@@ -988,6 +1083,149 @@ describe("OpenInference (LangChain)", () => {
     // Raw scalar "85" survives the JSON parse round-trip (becomes 85).
     expect(obs.output).toEqual([
       { role: "tool", parts: [{ type: "tool_call_response", response: 85 }] },
+    ]);
+  });
+
+  it("TOOL span: Python-repr input.value (single-quoted) is parsed to a dict", () => {
+    // OpenInference's Python LangChain instrumentor writes `input.value` for
+    // a TOOL span as `str(args_dict)` (Python repr — single-quoted strings,
+    // `True`/`False`/`None` literals) rather than `json.dumps`, despite
+    // labelling `input.mime_type` as `application/json`. `JSON.parse` rejects
+    // that, so without a Python-literal fallback `arguments` lands as the raw
+    // repr string — asymmetric with the GENERATION-side parsed-object shape
+    // and unparseable downstream. Parity with the Python SDK's
+    // `safe_python_literal_parse` (`ast.literal_eval`).
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "tavily_search",
+              "input.value": "{'queries': ['Alphabet 2031', 'GOOGL outlook']}",
+              "output.value": "results",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "tavily_search",
+            arguments: { queries: ["Alphabet 2031", "GOOGL outlook"] },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("TOOL span: Python-repr with apostrophes and True/False/None literals", () => {
+    // When a Python repr string contains an apostrophe Python switches the
+    // surrounding quote to `"`, producing a mixed-quote payload. Also check
+    // that `True`/`False`/`None` literals decode to JS `true`/`false`/`null`.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "think_tool",
+              "input.value":
+                "{'reflection': \"I've reviewed Alphabet's outlook\", 'done': True, 'note': None}",
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "think_tool",
+            arguments: {
+              reflection: "I've reviewed Alphabet's outlook",
+              done: true,
+              note: null,
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("TOOL span: input.value that is neither JSON nor a Python literal stays as raw string", () => {
+    // If a payload is neither valid JSON nor a parseable Python literal
+    // (e.g. a free-form sentence emitted by some custom instrumentor), the
+    // synthesizer should preserve the raw string rather than crash or drop
+    // it. Mirrors the existing JSON-only fallback semantics.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "echo",
+              "input.value": "not parseable as anything",
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "echo",
+            arguments: "not parseable as anything",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("TOOL span: empty input.value omits the arguments field", () => {
+    // Some instrumentors emit `input.value` as `""` to signal "no
+    // arguments". Treat that the same as a missing attribute (drop the
+    // `arguments` field) instead of stamping `"arguments": ""`, which is
+    // asymmetric with the GENERATION-side `"arguments": {}` shape and
+    // confuses downstream consumers expecting an object when present.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "no_args_tool",
+              "input.value": "",
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "no_args_tool" }],
+      },
     ]);
   });
 

@@ -17,6 +17,7 @@ import {
   genericPart,
   langchainEnvelopeToCanonical,
   safeJsonParse,
+  safePythonLiteralParse,
   toolCallPart,
   toolCallResponsePart,
   unpackIndexedMessages,
@@ -100,7 +101,6 @@ export const adapter = makeAdapter({
   OUTPUT_COST_ATTRS: ["llm.cost.completion"],
   TOTAL_COST_ATTRS: ["llm.cost.total"],
   TAGS_ATTRS: ["tag.tags"],
-  TIME_TO_FIRST_TOKEN_ATTRS: ["llm.time_to_first_token"],
   PROVIDER_ATTRS: ["llm.system", "llm.provider"],
   TOOL_NAME_ATTRS: ["tool.name"],
   CACHE_TOKEN_MAP: [
@@ -121,6 +121,25 @@ export const adapter = makeAdapter({
     // case via PROVIDER_ATTRS in core. This hook handles LangChain, where the
     // provider lives inside the AIMessage envelope on output.value.
     return findLangchainModelProvider(attrs["output.value"]);
+  },
+  resolveProvidedModel(attrs) {
+    // LangChain via OpenInference doesn't emit `llm.request.model` — the
+    // user-requested model is hidden inside the JSON-serialised
+    // `llm.invocation_parameters` blob (keys `model` / `model_name`). Pulling
+    // it out preserves the OTel-spec request/response model split:
+    // `llm.model_name` carries the API-returned versioned name
+    // (`gpt-4.1-mini-2025-04-14`), `provided_model_name` carries what the
+    // caller asked for (`gpt-4.1-mini`).
+    const raw = attrs["llm.invocation_parameters"];
+    if (typeof raw !== "string") return null;
+    const parsed = safeJsonParse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const obj = parsed as Record<string, unknown>;
+    for (const key of ["model", "model_name"]) {
+      const v = obj[key];
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+    return null;
   },
   unpackMessages(attrs) {
     return [
@@ -212,9 +231,20 @@ function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {
     : null;
   if (!toolName) return { input: null, output: null };
 
+  // OpenInference's Python LangChain instrumentor serialises `input.value` as
+  // `str(args_dict)` (Python repr — single-quoted strings, `True`/`False`/
+  // `None` literals) rather than `JSON.stringify`, despite stamping
+  // `input.mime_type` as `application/json`. `JSON.parse` rejects that, so
+  // without a Python-literal fallback `arguments` would land as a raw repr
+  // string — asymmetric with the GENERATION-side parsed-object shape and
+  // unparseable downstream.
   const rawIn = attrs["input.value"];
+  // Treat an empty `input.value` like a missing attribute — `toolCallPart`'s
+  // `args != null` guard drops the field rather than stamping
+  // `"arguments": ""`, which is asymmetric with the object-typed empty form
+  // (`"arguments": {}`).
   const argsParsed = typeof rawIn === "string"
-    ? safeJsonParse(rawIn) ?? rawIn
+    ? safeJsonParse(rawIn) ?? safePythonLiteralParse(rawIn) ?? (rawIn === "" ? null : rawIn)
     : rawIn;
   const input: Message[] = [{
     role: "assistant",
@@ -223,7 +253,7 @@ function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {
 
   const rawOut = attrs["output.value"];
   const parsedOut = typeof rawOut === "string"
-    ? safeJsonParse(rawOut) ?? rawOut
+    ? safeJsonParse(rawOut) ?? safePythonLiteralParse(rawOut) ?? rawOut
     : rawOut;
   let output: Message[] | null = null;
   // First try: full LangChain envelope (handles {output:<ToolMessage>}, bare

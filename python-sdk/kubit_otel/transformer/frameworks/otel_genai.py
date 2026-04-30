@@ -76,7 +76,8 @@ USER_ID_ATTRS = (
 )
 TAGS_ATTRS: tuple[str, ...] = ()
 
-TIME_TO_FIRST_TOKEN_ATTRS = ("gen_ai.usage.time_to_first_token",)
+# OTel GenAI semconv emits TTFT in seconds (float). Core converts to ms.
+TIME_TO_FIRST_TOKEN_SECONDS_ATTRS = ("gen_ai.response.time_to_first_chunk",)
 TOOL_CALLS_ATTRS = ("gen_ai.tool.calls",)
 TOOL_CALL_NAMES_ATTRS = ("gen_ai.tool.call_names",)
 TOOL_DEFINITIONS_ATTRS = ("gen_ai.tool.definitions",)

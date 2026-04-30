@@ -27,6 +27,8 @@ export function makeAdapter(overrides: AdapterOverrides): FrameworkAdapter {
     USER_ID_ATTRS: overrides.USER_ID_ATTRS ?? EMPTY,
     TAGS_ATTRS: overrides.TAGS_ATTRS ?? EMPTY,
     TIME_TO_FIRST_TOKEN_ATTRS: overrides.TIME_TO_FIRST_TOKEN_ATTRS ?? EMPTY,
+    TIME_TO_FIRST_TOKEN_SECONDS_ATTRS:
+      overrides.TIME_TO_FIRST_TOKEN_SECONDS_ATTRS ?? EMPTY,
     TOOL_CALLS_ATTRS: overrides.TOOL_CALLS_ATTRS ?? EMPTY,
     TOOL_CALL_NAMES_ATTRS: overrides.TOOL_CALL_NAMES_ATTRS ?? EMPTY,
     TOOL_DEFINITIONS_ATTRS: overrides.TOOL_DEFINITIONS_ATTRS ?? EMPTY,
@@ -44,6 +46,7 @@ export function makeAdapter(overrides: AdapterOverrides): FrameworkAdapter {
     resolveObservationType: overrides.resolveObservationType,
     resolveObservationTypeFallback: overrides.resolveObservationTypeFallback,
     resolveProvider: overrides.resolveProvider,
+    resolveProvidedModel: overrides.resolveProvidedModel,
     parseUsageBlobs: overrides.parseUsageBlobs,
     parseCostBlobs: overrides.parseCostBlobs,
     buildParams: overrides.buildParams,

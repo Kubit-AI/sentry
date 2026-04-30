@@ -101,6 +101,12 @@ export const adapter = makeAdapter({
   SESSION_ID_ATTRS: ["ai.telemetry.metadata.sessionId"],
   USER_ID_ATTRS: ["ai.telemetry.metadata.userId"],
   TAGS_ATTRS: ["ai.telemetry.metadata.tags"],
+  // `ai.response.msToFirstChunk` (current) and `ai.stream.msToFirstChunk`
+  // (pre-AI SDK 4.0) — both already in milliseconds, so no conversion.
+  TIME_TO_FIRST_TOKEN_ATTRS: [
+    "ai.response.msToFirstChunk",
+    "ai.stream.msToFirstChunk",
+  ],
   buildParams(attrs, merged) {
     for (const [srcAttr, canonicalKey] of AI_REQUEST_PARAM_MAP) {
       const val = attrs[srcAttr];

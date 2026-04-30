@@ -577,8 +577,9 @@ describe("openinference normalizer (LangChain envelope)", () => {
     ]);
   });
 
-  // `Command` without an `update.messages` payload (pure routing) carries no
-  // canonical messages — return null rather than fabricating one.
+  // `Command` whose `update` is a state delta with no message-shaped values
+  // carries no canonical messages — return null rather than fabricating one.
+  // (Empty `researcher_messages` list, no other channels.)
   it("returns null for Command envelope without inner messages", () => {
     const attrs: Record<string, unknown> = {
       "openinference.span.kind": "chain",
@@ -591,6 +592,81 @@ describe("openinference normalizer (LangChain envelope)", () => {
     };
     const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
     expect(r.output).toBeNull();
+  });
+
+  // `Command` with a *custom* state-channel name (multi-agent LangGraph apps
+  // almost always rename their message channels — `researcher_messages`,
+  // `supervisor_messages`, `chat_history`…). The default `MessagesState` uses
+  // `messages`, but every nontrivial graph customises it. The unwrapper
+  // should walk all values of `update` and pick up any list of LangChain
+  // messages, not only the `messages` key. Mirrors the `researcher_tools`
+  // ToolNode output shape we observed in deep_researcher traces — a
+  // `ToolMessage` carrying `tool_call_id` linkage that would otherwise be
+  // lost.
+  it("unwraps Command envelope with custom message channel", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "chain",
+      "output.value": JSON.stringify({
+        graph: null,
+        update: {
+          researcher_messages: [
+            { type: "tool", data: {
+                content: "Reflection recorded",
+                type: "tool",
+                name: "ResearchComplete",
+                tool_call_id: "call_ULHX17O2dpHDuDjzLlxZZFcP",
+                id: null,
+              } },
+          ],
+        },
+        resume: null,
+        goto: "compress_research",
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output).toEqual([
+      {
+        role: "tool",
+        parts: [{
+          type: "tool_call_response",
+          response: "Reflection recorded",
+          id: "call_ULHX17O2dpHDuDjzLlxZZFcP",
+        }],
+        name: "ResearchComplete",
+      },
+    ]);
+  });
+
+  // When `update` mixes a message channel with non-message scalars (`notes`
+  // is a plain string list in deep_researcher's `supervisor_tools` output),
+  // only the message channel is unwrapped — arbitrary scalars must not be
+  // text-wrapped into fake messages.
+  it("Command envelope picks up messages alongside scalar state", () => {
+    const attrs: Record<string, unknown> = {
+      "openinference.span.kind": "chain",
+      "output.value": JSON.stringify({
+        graph: null,
+        update: {
+          supervisor_messages: [
+            { type: "ai", data: {
+                content: "Delegating to researcher.",
+                type: "ai",
+                id: "a1",
+                tool_calls: [],
+              } },
+          ],
+          notes: ["Reflection recorded: ..."],
+        },
+        resume: null,
+        goto: "supervisor",
+      }),
+    };
+    const r = obs(transformSpans([makeSpan({ attrs })], "w", "c"));
+    expect(r.output).toEqual([
+      { role: "assistant", parts: [
+          { type: "text", content: "Delegating to researcher." },
+        ] },
+    ]);
   });
 
   // Non-conversational CHAIN spans (e.g. LangGraph's RunnableLambda routing

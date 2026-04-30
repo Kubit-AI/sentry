@@ -266,6 +266,168 @@ class TestLangfuseProviderModelAliases:
         ]
 
 
+class TestTimeToFirstToken:
+    """Canonical unit is milliseconds (int). Vercel AI emits ms directly under
+    ``ai.response.msToFirstChunk`` (and legacy ``ai.stream.msToFirstChunk`` for
+    pre-AI-SDK-4.0). OTel GenAI semconv emits seconds (float) under
+    ``gen_ai.response.time_to_first_chunk``. Core converts seconds→ms via
+    float→round.
+    """
+
+    def test_reads_ai_response_ms_verbatim(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.response.msToFirstChunk": 423,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 423
+
+    def test_reads_legacy_ai_stream_ms(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.stream.msToFirstChunk": 312,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 312
+
+    def test_converts_seconds_to_ms(self):
+        span = _mock_span(
+            attributes={
+                "gen_ai.response.time_to_first_chunk": 0.5,
+                "gen_ai.system": "openai",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 500
+
+    def test_rounds_sub_millisecond_seconds(self):
+        span = _mock_span(
+            attributes={
+                "gen_ai.response.time_to_first_chunk": 0.0023,
+                "gen_ai.system": "openai",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 2
+
+    def test_ms_alias_wins_over_seconds(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.response.msToFirstChunk": 100,
+                "gen_ai.response.time_to_first_chunk": 9.0,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 100
+
+    def test_returns_none_when_no_alias_present(self):
+        span = _mock_span(
+            attributes={"langfuse.observation.type": "generation"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] is None
+
+    # Langfuse records the first-chunk timestamp under
+    # ``langfuse.observation.completion_start_time`` rather than a TTFT
+    # duration. Derive ms = completion_start_time − span.start_time when no
+    # direct alias is present. Span default start_time_ns = 1_700_000_000e9.
+    def test_derives_from_langfuse_completion_start_time(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.completion_start_time": json.dumps(
+                    "2023-11-14T22:13:21.285Z"
+                ),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 1285
+
+    def test_ms_alias_beats_langfuse_derivation(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.response.msToFirstChunk": 42,
+                "langfuse.observation.completion_start_time": "2023-11-14T22:13:21.285Z",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 42
+
+    def test_clamps_negative_diff_to_zero(self):
+        span = _mock_span(
+            start_time_ns=1_700_000_001_000_000_000,
+            end_time_ns=1_700_000_002_000_000_000,
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.completion_start_time": "2023-11-14T22:13:20.000Z",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 0
+
+    def test_returns_none_when_completion_start_time_unparseable(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.completion_start_time": "not-an-iso-date",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] is None
+
+
+class TestLangfuseCompletionStartTime:
+    """Langfuse JSON-stringifies non-string values (e.g. ``Date``) before
+    storing them as OTel string attributes, so an ISO timestamp arrives as the
+    literal characters ``"2026-04-30T..."`` (quote chars included). Verify
+    the transformer unwraps the JSON quoting.
+    """
+
+    def test_unwraps_json_encoded_iso_timestamp(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.model.name": "gpt-4o",
+                "langfuse.observation.completion_start_time": json.dumps(
+                    "2026-04-30T15:14:10.094Z"
+                ),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["completion_start_time"] == "2026-04-30T15:14:10.094Z"
+
+    def test_passes_plain_iso_string_through(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.model.name": "gpt-4o",
+                "langfuse.observation.completion_start_time": "2026-04-30T15:14:10.094Z",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["completion_start_time"] == "2026-04-30T15:14:10.094Z"
+
+    def test_returns_none_when_attribute_absent(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.model.name": "gpt-4o",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["completion_start_time"] is None
+
+
 class TestJsonBlobRobustness:
     def test_malformed_usage_json_is_ignored(self):
         span = _mock_span(
@@ -400,15 +562,21 @@ class TestRootAndResourceMapping:
         assert len([r for r in records if r["entity_type"] == "trace"]) == 1
 
 
-class TestOrphanAsRoot:
-    """A span whose parent is absent from the export batch is treated as a
-    trace root. This handles the common case where a server/HTTP parent span
-    was filtered out by ``is_default_export_span`` before the GenAI children
-    reached the exporter — without it, those children would carry a
-    ``parent_observation_id`` pointing at a span Kubit never sees.
+class TestRootDetection:
+    """Root detection is purely OTel-local: only a span whose OTel parent
+    context is empty becomes a trace root. Cross-batch flushing is the norm
+    (short children commonly end before their long-running parent), so
+    per-batch "parent not in this batch" promotion would emit duplicate
+    traces and a fragmented tree. Surviving children of a filtered HTTP/
+    server parent carry a dangling ``parent_observation_id`` until
+    ingestion-side reconciliation clears it.
     """
 
-    def test_orphan_span_promoted_to_root(self):
+    def test_span_with_parent_id_never_promoted_to_root(self):
+        # Cross-batch case: the parent span is being flushed in a later
+        # batch (or was filtered out upstream). Either way the SDK leaves
+        # ``parent_observation_id`` pointing at the real OTel span ID and
+        # lets ingestion reconcile when (or whether) the parent arrives.
         span = _mock_span(
             trace_id=0xAAA,
             span_id=0xCCC,
@@ -416,11 +584,10 @@ class TestOrphanAsRoot:
             attributes={"langfuse.observation.type": "generation"},
         )
         records = transform_spans([span], "wid", "claim")
-        trace = _trace(records)
-        assert trace["id"] == format(0xAAA, "032x")
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 0
         [obs] = _observations(records)
-        assert obs["parent_observation_id"] is None
-        assert obs["trace_name"] == "span"
+        assert obs["parent_observation_id"] == format(0xBBB, "016x")
+        assert obs["trace_name"] is None
 
     def test_child_unchanged_when_parent_in_same_batch(self):
         parent = _mock_span(
@@ -441,7 +608,12 @@ class TestOrphanAsRoot:
             0xBBB, "016x"
         )
 
-    def test_multiple_orphans_same_trace_emit_one_trace(self):
+    def test_only_otel_rootless_spans_emit_a_trace_record(self):
+        # Two spans both have a parent, neither is a true OTel root → no
+        # trace record is emitted from this batch. If their real parent
+        # ever arrives it will emit the trace; if it never does (parent
+        # was filtered), ingestion-side reconciliation handles the orphan
+        # tree.
         spans = [
             _mock_span(
                 trace_id=0xAAA,
@@ -457,9 +629,10 @@ class TestOrphanAsRoot:
             ),
         ]
         records = transform_spans(spans, "wid", "claim")
-        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 0
         for obs in _observations(records):
-            assert obs["parent_observation_id"] is None
+            assert obs["parent_observation_id"] == format(0xBBB, "016x")
+            assert obs["trace_name"] is None
 
 
 class TestObservationTypePassThrough:
