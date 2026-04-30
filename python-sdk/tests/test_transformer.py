@@ -266,6 +266,48 @@ class TestLangfuseProviderModelAliases:
         ]
 
 
+class TestLangfuseCompletionStartTime:
+    """Langfuse JSON-stringifies non-string values (e.g. ``Date``) before
+    storing them as OTel string attributes, so an ISO timestamp arrives as the
+    literal characters ``"2026-04-30T..."`` (quote chars included). Verify
+    the transformer unwraps the JSON quoting.
+    """
+
+    def test_unwraps_json_encoded_iso_timestamp(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.model.name": "gpt-4o",
+                "langfuse.observation.completion_start_time": json.dumps(
+                    "2026-04-30T15:14:10.094Z"
+                ),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["completion_start_time"] == "2026-04-30T15:14:10.094Z"
+
+    def test_passes_plain_iso_string_through(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.model.name": "gpt-4o",
+                "langfuse.observation.completion_start_time": "2026-04-30T15:14:10.094Z",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["completion_start_time"] == "2026-04-30T15:14:10.094Z"
+
+    def test_returns_none_when_attribute_absent(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.model.name": "gpt-4o",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["completion_start_time"] is None
+
+
 class TestJsonBlobRobustness:
     def test_malformed_usage_json_is_ignored(self):
         span = _mock_span(

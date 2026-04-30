@@ -24,6 +24,7 @@ import type {
   Part,
 } from "./frameworks/types";
 import {
+  decodeJsonStringAttr,
   firstAttr,
   hrDurationMs,
   hrTimeToIso,
@@ -331,7 +332,11 @@ export function transformSpans(
         release: serviceVersion,
         start_time: startIso,
         end_time: endIso,
-        completion_start_time: firstAttr(spanAttrs, COMPLETION_START_ATTRS) ?? null,
+        completion_start_time:
+          (decodeJsonStringAttr(firstAttr(spanAttrs, COMPLETION_START_ATTRS)) as
+            | string
+            | null
+            | undefined) ?? null,
         latency: latencyMs,
         time_to_first_token: safeInt(firstAttr(spanAttrs, TIME_TO_FIRST_TOKEN_ATTRS)),
         model,

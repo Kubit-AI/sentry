@@ -19,6 +19,7 @@ from .frameworks import (
     langfuse as _langfuse,
 )
 from .helpers import (
+    decode_json_string_attr,
     first_attr,
     merge_json_blob,
     nanos_to_iso,
@@ -317,7 +318,9 @@ def transform_spans(
             "release": service_version,
             "start_time": start_iso,
             "end_time": end_iso,
-            "completion_start_time": first_attr(span_attrs, _langfuse.COMPLETION_START_ATTRS),
+            "completion_start_time": decode_json_string_attr(
+                first_attr(span_attrs, _langfuse.COMPLETION_START_ATTRS)
+            ),
             "latency": latency_ms,
             "time_to_first_token": safe_int(first_attr(span_attrs, TIME_TO_FIRST_TOKEN_ATTRS)),
             "model": model,

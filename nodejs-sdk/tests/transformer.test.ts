@@ -324,6 +324,71 @@ describe("Langfuse provider/model alias coverage", () => {
   });
 });
 
+describe("Langfuse completion_start_time", () => {
+  // Langfuse JSON-stringifies non-string values (e.g. `Date`) before storing
+  // them as OTel string attributes, so an ISO timestamp arrives as the literal
+  // characters `"2026-04-30T..."` (quote chars included). Verify the
+  // transformer unwraps the JSON quoting.
+  it("unwraps a JSON-encoded ISO timestamp", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.model.name": "gpt-4o",
+              "langfuse.observation.completion_start_time": JSON.stringify(
+                "2026-04-30T15:14:10.094Z",
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.completion_start_time).toBe("2026-04-30T15:14:10.094Z");
+  });
+
+  it("passes plain ISO strings through unchanged", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.model.name": "gpt-4o",
+              "langfuse.observation.completion_start_time":
+                "2026-04-30T15:14:10.094Z",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.completion_start_time).toBe("2026-04-30T15:14:10.094Z");
+  });
+
+  it("returns null when the attribute is absent", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.model.name": "gpt-4o",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.completion_start_time).toBeNull();
+  });
+});
+
 describe("JSON blob robustness", () => {
   it("malformed usage_details JSON is ignored", () => {
     const [obs] = observations(

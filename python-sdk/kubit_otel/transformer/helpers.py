@@ -61,6 +61,23 @@ def clean_discriminator(raw: Any) -> str:
     return raw.strip().lower()
 
 
+def decode_json_string_attr(raw: Any) -> Any:
+    """Unwrap a JSON-encoded string attribute.
+
+    Langfuse JSON-stringifies non-string values (e.g. ``Date``) before storing
+    them as OTel string attributes, so an ISO timestamp arrives as the literal
+    characters ``"2026-04-30T..."`` (quote chars included). Idempotent on
+    plain strings.
+    """
+    if not isinstance(raw, str) or len(raw) < 2 or raw[0] != '"':
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    return parsed if isinstance(parsed, str) else raw
+
+
 def nanos_to_iso(nanos: Optional[int]) -> str:
     if not nanos:
         return now_iso()

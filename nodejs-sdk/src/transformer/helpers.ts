@@ -56,6 +56,23 @@ export function cleanDiscriminator(raw: unknown): string {
   return raw.trim().toLowerCase();
 }
 
+/**
+ * Unwrap a JSON-encoded string attribute. Langfuse JSON-stringifies non-string
+ * values (e.g. Date) before storing them as OTel string attributes, so an ISO
+ * timestamp arrives as the literal characters `"2026-04-30T..."` (quote chars
+ * included). Idempotent on plain strings.
+ */
+export function decodeJsonStringAttr(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  if (raw.length < 2 || raw.charCodeAt(0) !== 34 /* " */) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "string" ? parsed : raw;
+  } catch {
+    return raw;
+  }
+}
+
 export function hrTimeToIso(hr: [number, number] | undefined): string {
   if (!hr) return nowIsoString();
   const ms = hr[0] * 1000 + Math.floor(hr[1] / 1_000_000);
