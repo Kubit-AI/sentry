@@ -83,6 +83,7 @@ type AttrKey =
   | "USER_ID_ATTRS"
   | "TAGS_ATTRS"
   | "TIME_TO_FIRST_TOKEN_ATTRS"
+  | "TIME_TO_FIRST_TOKEN_SECONDS_ATTRS"
   | "TOOL_CALLS_ATTRS"
   | "TOOL_CALL_NAMES_ATTRS"
   | "TOOL_DEFINITIONS_ATTRS"
@@ -122,6 +123,9 @@ export const SESSION_ID_ATTRS = concat("SESSION_ID_ATTRS");
 export const USER_ID_ATTRS = concat("USER_ID_ATTRS");
 export const TAGS_ATTRS = concat("TAGS_ATTRS");
 export const TIME_TO_FIRST_TOKEN_ATTRS = concat("TIME_TO_FIRST_TOKEN_ATTRS");
+export const TIME_TO_FIRST_TOKEN_SECONDS_ATTRS = concat(
+  "TIME_TO_FIRST_TOKEN_SECONDS_ATTRS",
+);
 export const TOOL_CALLS_ATTRS = concat("TOOL_CALLS_ATTRS");
 export const TOOL_CALL_NAMES_ATTRS = concat("TOOL_CALL_NAMES_ATTRS");
 export const TOOL_DEFINITIONS_ATTRS = concat("TOOL_DEFINITIONS_ATTRS");
@@ -140,6 +144,41 @@ export const CACHE_TOKEN_MAP = concatPairs();
 // generic span name auto-instrumentation chose (e.g. `POST /chat`). Used for
 // both the trace record's `name` and the observation record's `trace_name`.
 const LANGFUSE_TRACE_NAME_ATTRS = ["langfuse.trace.name"] as const;
+
+/**
+ * Resolve `time_to_first_token` in canonical milliseconds (int).
+ *
+ * Three-tier priority:
+ *   1. ms-typed aliases (e.g. Vercel `ai.response.msToFirstChunk`)
+ *   2. seconds-typed aliases (e.g. OTel GenAI `gen_ai.response.time_to_first_chunk`),
+ *      converted to ms via float→round (`0.5` → `500`)
+ *   3. derived from `completion_start_time − span.startTime` for emitters that
+ *      record the first-chunk timestamp instead of a duration (Langfuse).
+ *      Negative diffs (clock skew / instrumentation bug) clamp to 0.
+ *
+ * Direct measurements win over derivation because instrumentations typically
+ * record the duration with higher precision than the round-tripped
+ * timestamp.
+ */
+function resolveTtftMs(
+  spanAttrs: Record<string, unknown>,
+  startTime: [number, number],
+  completionStartTimeIso: string | null,
+): number | null {
+  const ms = safeInt(firstAttr(spanAttrs, TIME_TO_FIRST_TOKEN_ATTRS));
+  if (ms !== null) return ms;
+  const seconds = safeFloat(firstAttr(spanAttrs, TIME_TO_FIRST_TOKEN_SECONDS_ATTRS));
+  if (seconds !== null) return Math.round(seconds * 1000);
+  if (completionStartTimeIso) {
+    const completionMs = Date.parse(completionStartTimeIso);
+    if (Number.isFinite(completionMs)) {
+      const startMs = startTime[0] * 1000 + startTime[1] / 1_000_000;
+      const diff = Math.round(completionMs - startMs);
+      return diff < 0 ? 0 : diff;
+    }
+  }
+  return null;
+}
 
 const RESOURCE_SERVICE_VERSION = "service.version";
 const RESOURCE_DEPLOYMENT_ENV = "deployment.environment";
@@ -309,6 +348,11 @@ export function transformSpans(
     const modelParameters = buildModelParameters(spanAttrs);
     const obsType = resolveObservationType(span, spanAttrs, model);
     const provider = resolveProvider(spanAttrs);
+    const completionStartTime =
+      (decodeJsonStringAttr(firstAttr(spanAttrs, COMPLETION_START_ATTRS)) as
+        | string
+        | null
+        | undefined) ?? null;
 
     records.push(
       withClaim({
@@ -332,13 +376,13 @@ export function transformSpans(
         release: serviceVersion,
         start_time: startIso,
         end_time: endIso,
-        completion_start_time:
-          (decodeJsonStringAttr(firstAttr(spanAttrs, COMPLETION_START_ATTRS)) as
-            | string
-            | null
-            | undefined) ?? null,
+        completion_start_time: completionStartTime,
         latency: latencyMs,
-        time_to_first_token: safeInt(firstAttr(spanAttrs, TIME_TO_FIRST_TOKEN_ATTRS)),
+        time_to_first_token: resolveTtftMs(
+          spanAttrs,
+          span.startTime,
+          completionStartTime,
+        ),
         model,
         provided_model_name: providedModelName,
         internal_model_id: null,

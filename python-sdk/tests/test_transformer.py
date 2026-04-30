@@ -266,6 +266,126 @@ class TestLangfuseProviderModelAliases:
         ]
 
 
+class TestTimeToFirstToken:
+    """Canonical unit is milliseconds (int). Vercel AI emits ms directly under
+    ``ai.response.msToFirstChunk`` (and legacy ``ai.stream.msToFirstChunk`` for
+    pre-AI-SDK-4.0). OTel GenAI semconv emits seconds (float) under
+    ``gen_ai.response.time_to_first_chunk``. Core converts seconds→ms via
+    float→round.
+    """
+
+    def test_reads_ai_response_ms_verbatim(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.response.msToFirstChunk": 423,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 423
+
+    def test_reads_legacy_ai_stream_ms(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.stream.msToFirstChunk": 312,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 312
+
+    def test_converts_seconds_to_ms(self):
+        span = _mock_span(
+            attributes={
+                "gen_ai.response.time_to_first_chunk": 0.5,
+                "gen_ai.system": "openai",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 500
+
+    def test_rounds_sub_millisecond_seconds(self):
+        span = _mock_span(
+            attributes={
+                "gen_ai.response.time_to_first_chunk": 0.0023,
+                "gen_ai.system": "openai",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 2
+
+    def test_ms_alias_wins_over_seconds(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.response.msToFirstChunk": 100,
+                "gen_ai.response.time_to_first_chunk": 9.0,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 100
+
+    def test_returns_none_when_no_alias_present(self):
+        span = _mock_span(
+            attributes={"langfuse.observation.type": "generation"},
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] is None
+
+    # Langfuse records the first-chunk timestamp under
+    # ``langfuse.observation.completion_start_time`` rather than a TTFT
+    # duration. Derive ms = completion_start_time − span.start_time when no
+    # direct alias is present. Span default start_time_ns = 1_700_000_000e9.
+    def test_derives_from_langfuse_completion_start_time(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.completion_start_time": json.dumps(
+                    "2023-11-14T22:13:21.285Z"
+                ),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 1285
+
+    def test_ms_alias_beats_langfuse_derivation(self):
+        span = _mock_span(
+            scope_name="ai",
+            attributes={
+                "ai.operationId": "ai.streamText",
+                "ai.response.msToFirstChunk": 42,
+                "langfuse.observation.completion_start_time": "2023-11-14T22:13:21.285Z",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 42
+
+    def test_clamps_negative_diff_to_zero(self):
+        span = _mock_span(
+            start_time_ns=1_700_000_001_000_000_000,
+            end_time_ns=1_700_000_002_000_000_000,
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.completion_start_time": "2023-11-14T22:13:20.000Z",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] == 0
+
+    def test_returns_none_when_completion_start_time_unparseable(self):
+        span = _mock_span(
+            attributes={
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.completion_start_time": "not-an-iso-date",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["time_to_first_token"] is None
+
+
 class TestLangfuseCompletionStartTime:
     """Langfuse JSON-stringifies non-string values (e.g. ``Date``) before
     storing them as OTel string attributes, so an ISO timestamp arrives as the

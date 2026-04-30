@@ -69,7 +69,12 @@ SESSION_ID_ATTRS = ("ai.telemetry.metadata.sessionId",)
 USER_ID_ATTRS = ("ai.telemetry.metadata.userId",)
 TAGS_ATTRS = ("ai.telemetry.metadata.tags",)
 
-TIME_TO_FIRST_TOKEN_ATTRS: tuple[str, ...] = ()
+# ``ai.response.msToFirstChunk`` (current) and ``ai.stream.msToFirstChunk``
+# (pre-AI SDK 4.0) — both already in milliseconds, so no conversion.
+TIME_TO_FIRST_TOKEN_ATTRS = (
+    "ai.response.msToFirstChunk",
+    "ai.stream.msToFirstChunk",
+)
 TOOL_CALLS_ATTRS: tuple[str, ...] = ()
 TOOL_CALL_NAMES_ATTRS: tuple[str, ...] = ()
 TOOL_DEFINITIONS_ATTRS: tuple[str, ...] = ()

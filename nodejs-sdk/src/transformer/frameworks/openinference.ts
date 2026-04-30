@@ -101,7 +101,6 @@ export const adapter = makeAdapter({
   OUTPUT_COST_ATTRS: ["llm.cost.completion"],
   TOTAL_COST_ATTRS: ["llm.cost.total"],
   TAGS_ATTRS: ["tag.tags"],
-  TIME_TO_FIRST_TOKEN_ATTRS: ["llm.time_to_first_token"],
   PROVIDER_ATTRS: ["llm.system", "llm.provider"],
   TOOL_NAME_ATTRS: ["tool.name"],
   CACHE_TOKEN_MAP: [

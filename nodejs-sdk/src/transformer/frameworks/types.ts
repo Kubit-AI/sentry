@@ -128,6 +128,7 @@ export interface FrameworkAdapter {
   readonly USER_ID_ATTRS: readonly string[];
   readonly TAGS_ATTRS: readonly string[];
   readonly TIME_TO_FIRST_TOKEN_ATTRS: readonly string[];
+  readonly TIME_TO_FIRST_TOKEN_SECONDS_ATTRS: readonly string[];
   readonly TOOL_CALLS_ATTRS: readonly string[];
   readonly TOOL_CALL_NAMES_ATTRS: readonly string[];
   readonly TOOL_DEFINITIONS_ATTRS: readonly string[];

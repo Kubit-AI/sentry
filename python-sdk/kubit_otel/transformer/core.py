@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, Optional, Sequence
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -101,6 +102,7 @@ SESSION_ID_ATTRS = _concat("SESSION_ID_ATTRS")
 USER_ID_ATTRS = _concat("USER_ID_ATTRS")
 TAGS_ATTRS = _concat("TAGS_ATTRS")
 TIME_TO_FIRST_TOKEN_ATTRS = _concat("TIME_TO_FIRST_TOKEN_ATTRS")
+TIME_TO_FIRST_TOKEN_SECONDS_ATTRS = _concat("TIME_TO_FIRST_TOKEN_SECONDS_ATTRS")
 TOOL_CALLS_ATTRS = _concat("TOOL_CALLS_ATTRS")
 TOOL_CALL_NAMES_ATTRS = _concat("TOOL_CALL_NAMES_ATTRS")
 TOOL_DEFINITIONS_ATTRS = _concat("TOOL_DEFINITIONS_ATTRS")
@@ -118,6 +120,47 @@ CACHE_TOKEN_MAP = _concat_pairs("CACHE_TOKEN_MAP")
 # Resource attribute names (fall-back when span-level isn't set).
 _RESOURCE_SERVICE_VERSION = "service.version"
 _RESOURCE_DEPLOYMENT_ENV = "deployment.environment"
+
+
+def _resolve_ttft_ms(
+    span_attrs: dict,
+    start_time_ns: Optional[int],
+    completion_start_time_iso: Any,
+) -> Optional[int]:
+    """Resolve ``time_to_first_token`` in canonical milliseconds (int).
+
+    Three-tier priority:
+      1. ms-typed aliases (e.g. Vercel ``ai.response.msToFirstChunk``)
+      2. seconds-typed aliases (e.g. OTel GenAI
+         ``gen_ai.response.time_to_first_chunk``), converted to ms via
+         float→round (``0.5`` → ``500``)
+      3. derived from ``completion_start_time − span.start_time`` for emitters
+         that record the first-chunk timestamp instead of a duration
+         (Langfuse). Negative diffs (clock skew / instrumentation bug) clamp
+         to 0.
+
+    Direct measurements win over derivation because instrumentations
+    typically record the duration with higher precision than the
+    round-tripped timestamp.
+    """
+    ms = safe_int(first_attr(span_attrs, TIME_TO_FIRST_TOKEN_ATTRS))
+    if ms is not None:
+        return ms
+    seconds = safe_float(first_attr(span_attrs, TIME_TO_FIRST_TOKEN_SECONDS_ATTRS))
+    if seconds is not None:
+        return round(seconds * 1000)
+    if isinstance(completion_start_time_iso, str) and start_time_ns is not None:
+        try:
+            dt = datetime.fromisoformat(
+                completion_start_time_iso.replace("Z", "+00:00")
+            )
+        except (ValueError, TypeError):
+            return None
+        completion_ms = dt.timestamp() * 1000
+        start_ms = start_time_ns / 1_000_000
+        diff = round(completion_ms - start_ms)
+        return max(0, diff)
+    return None
 
 
 def transform_spans(
@@ -298,6 +341,9 @@ def transform_spans(
         model_parameters = _build_model_parameters(span_attrs)
         obs_type = _resolve_observation_type(span, span_attrs, model)
         provider = _resolve_provider(span_attrs)
+        completion_start_time = decode_json_string_attr(
+            first_attr(span_attrs, _langfuse.COMPLETION_START_ATTRS)
+        )
 
         records.append(_with_claim({
             "entity_type": "enriched_observation",
@@ -318,11 +364,11 @@ def transform_spans(
             "release": service_version,
             "start_time": start_iso,
             "end_time": end_iso,
-            "completion_start_time": decode_json_string_attr(
-                first_attr(span_attrs, _langfuse.COMPLETION_START_ATTRS)
-            ),
+            "completion_start_time": completion_start_time,
             "latency": latency_ms,
-            "time_to_first_token": safe_int(first_attr(span_attrs, TIME_TO_FIRST_TOKEN_ATTRS)),
+            "time_to_first_token": _resolve_ttft_ms(
+                span_attrs, span.start_time, completion_start_time
+            ),
             "model": model,
             "provided_model_name": provided_model_name,
             "internal_model_id": None,

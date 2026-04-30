@@ -71,7 +71,6 @@ SESSION_ID_ATTRS: tuple[str, ...] = ()
 USER_ID_ATTRS: tuple[str, ...] = ()
 TAGS_ATTRS = ("tag.tags",)
 
-TIME_TO_FIRST_TOKEN_ATTRS = ("llm.time_to_first_token",)
 TOOL_CALLS_ATTRS: tuple[str, ...] = ()
 TOOL_CALL_NAMES_ATTRS: tuple[str, ...] = ()
 TOOL_DEFINITIONS_ATTRS: tuple[str, ...] = ()

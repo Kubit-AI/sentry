@@ -324,6 +324,215 @@ describe("Langfuse provider/model alias coverage", () => {
   });
 });
 
+describe("time_to_first_token", () => {
+  // Canonical unit is milliseconds (int). Vercel AI emits ms directly under
+  // `ai.response.msToFirstChunk` (and legacy `ai.stream.msToFirstChunk` for
+  // pre-AI-SDK-4.0). OTel GenAI semconv emits seconds (float) under
+  // `gen_ai.response.time_to_first_chunk`. Core converts seconds→ms via
+  // float→round.
+
+  it("reads ai.response.msToFirstChunk verbatim (Vercel AI, ms)", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.response.msToFirstChunk": 423,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(423);
+  });
+
+  it("reads legacy ai.stream.msToFirstChunk", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.stream.msToFirstChunk": 312,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(312);
+  });
+
+  it("converts gen_ai.response.time_to_first_chunk seconds to ms", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "gen_ai.response.time_to_first_chunk": 0.5,
+              "gen_ai.system": "openai",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(500);
+  });
+
+  it("rounds sub-millisecond seconds via Math.round", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "gen_ai.response.time_to_first_chunk": 0.0023,
+              "gen_ai.system": "openai",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(2);
+  });
+
+  it("ms-typed alias wins when both present", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.response.msToFirstChunk": 100,
+              "gen_ai.response.time_to_first_chunk": 9.0,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(100);
+  });
+
+  it("returns null when no TTFT alias is present", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: { "langfuse.observation.type": "generation" },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBeNull();
+  });
+
+  // Langfuse records the first-chunk timestamp under
+  // `langfuse.observation.completion_start_time` rather than a TTFT duration.
+  // Derive ms = completion_start_time − span.startTime when no direct alias
+  // is present.
+  it("derives TTFT from Langfuse completion_start_time minus start", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.completion_start_time": JSON.stringify(
+                "2023-11-14T22:13:21.285Z",
+              ),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(1285);
+  });
+
+  it("ms alias beats Langfuse derivation", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "ai",
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: {
+              "ai.operationId": "ai.streamText",
+              "ai.response.msToFirstChunk": 42,
+              "langfuse.observation.completion_start_time":
+                "2023-11-14T22:13:21.285Z",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(42);
+  });
+
+  it("clamps negative diff to 0", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_001, 0],
+            endTime: [1_700_000_002, 0],
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.completion_start_time":
+                "2023-11-14T22:13:20.000Z",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBe(0);
+  });
+
+  it("returns null when completion_start_time is unparseable", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_001, 0],
+            attrs: {
+              "langfuse.observation.type": "generation",
+              "langfuse.observation.completion_start_time": "not-an-iso-date",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.time_to_first_token).toBeNull();
+  });
+});
+
 describe("Langfuse completion_start_time", () => {
   // Langfuse JSON-stringifies non-string values (e.g. `Date`) before storing
   // them as OTel string attributes, so an ISO timestamp arrives as the literal

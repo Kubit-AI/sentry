@@ -24,7 +24,6 @@ Attribute naming in OpenInference relies primarily on the `llm.*` and `embedding
 | `embedding.model_name` | `gen_ai.request.model` | OI separates embedding attributes from LLM attributes entirely. |
 | `llm.cost.prompt` / `llm.cost.completion` / `llm.cost.total` | (no OTel equivalent — backend-calculated) | OI emits per-call USD cost on the span; adapter surfaces these as `input_cost` / `output_cost` / `total_cost` on the enriched observation. |
 | `tag.tags` | (no OTel equivalent) | OI's free-form tag list; surfaced as `tags`. |
-| `llm.time_to_first_token` | (no OTel equivalent — backend-calculated) | OI emits TTFT (ms) directly on the span; adapter surfaces as `time_to_first_token`. |
 | `llm.token_count.prompt_details.cache_read` | `gen_ai.usage.cache_read.input_tokens` | Cached-prompt token reuse; OI nests under `prompt_details`. |
 | `llm.token_count.prompt_details.cache_write` | `gen_ai.usage.cache_creation.input_tokens` | Cache-write tokens; OI nests under `prompt_details`. |
 | `llm.token_count.completion_details.reasoning` | (no direct OTel equivalent) | Reasoning-trace token accounting (e.g. o1-style models); OI nests under `completion_details`. |
