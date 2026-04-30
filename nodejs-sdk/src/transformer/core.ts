@@ -165,13 +165,13 @@ export function transformSpans(
   const now = nowIsoString();
   const emittedTraces = new Set<string>();
 
-  // A span is "orphan" when its parent span ID is not present in this batch —
-  // the common cause is the HTTP/server parent being dropped upstream by the
-  // span filter. Promote orphans to roots so a `trace` record is emitted and
-  // `parent_observation_id` is cleared. Per-batch only; no cross-batch state.
-  const batchSpanIds = new Set<string>();
-  for (const s of spans) batchSpanIds.add(s.spanContext().spanId);
-
+  // Root detection is purely OTel-local: a span is a root when its OTel
+  // parent context is empty. Cross-batch flushing is the norm — short
+  // children commonly end (and flush) before their long-running parent —
+  // so a per-batch "parent not in this batch" check would misclassify
+  // those as roots and emit duplicate `trace` rows. Surviving children of
+  // a filtered HTTP/server parent will carry a dangling
+  // `parent_observation_id` until ingestion-side reconciliation clears it.
   const withClaim = (rec: KubitRecord): KubitRecord => {
     (rec as Record<string, unknown>)._wid_claim = widClaim;
     return rec;
@@ -188,7 +188,7 @@ export function transformSpans(
     const traceId = span.spanContext().traceId;
     const spanId = span.spanContext().spanId;
     const parentId = span.parentSpanContext?.spanId || null;
-    const isRoot = !parentId || !batchSpanIds.has(parentId);
+    const isRoot = !parentId;
 
     const startIso = hrTimeToIso(span.startTime);
     const endIso = hrTimeToIso(span.endTime);
@@ -314,7 +314,7 @@ export function transformSpans(
         entity_type: "enriched_observation",
         id: spanId,
         trace_id: traceId,
-        parent_observation_id: isRoot ? null : parentId,
+        parent_observation_id: parentId,
         name: span.name,
         type: obsType,
         project_id: wid,

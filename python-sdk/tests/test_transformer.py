@@ -400,15 +400,21 @@ class TestRootAndResourceMapping:
         assert len([r for r in records if r["entity_type"] == "trace"]) == 1
 
 
-class TestOrphanAsRoot:
-    """A span whose parent is absent from the export batch is treated as a
-    trace root. This handles the common case where a server/HTTP parent span
-    was filtered out by ``is_default_export_span`` before the GenAI children
-    reached the exporter — without it, those children would carry a
-    ``parent_observation_id`` pointing at a span Kubit never sees.
+class TestRootDetection:
+    """Root detection is purely OTel-local: only a span whose OTel parent
+    context is empty becomes a trace root. Cross-batch flushing is the norm
+    (short children commonly end before their long-running parent), so
+    per-batch "parent not in this batch" promotion would emit duplicate
+    traces and a fragmented tree. Surviving children of a filtered HTTP/
+    server parent carry a dangling ``parent_observation_id`` until
+    ingestion-side reconciliation clears it.
     """
 
-    def test_orphan_span_promoted_to_root(self):
+    def test_span_with_parent_id_never_promoted_to_root(self):
+        # Cross-batch case: the parent span is being flushed in a later
+        # batch (or was filtered out upstream). Either way the SDK leaves
+        # ``parent_observation_id`` pointing at the real OTel span ID and
+        # lets ingestion reconcile when (or whether) the parent arrives.
         span = _mock_span(
             trace_id=0xAAA,
             span_id=0xCCC,
@@ -416,11 +422,10 @@ class TestOrphanAsRoot:
             attributes={"langfuse.observation.type": "generation"},
         )
         records = transform_spans([span], "wid", "claim")
-        trace = _trace(records)
-        assert trace["id"] == format(0xAAA, "032x")
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 0
         [obs] = _observations(records)
-        assert obs["parent_observation_id"] is None
-        assert obs["trace_name"] == "span"
+        assert obs["parent_observation_id"] == format(0xBBB, "016x")
+        assert obs["trace_name"] is None
 
     def test_child_unchanged_when_parent_in_same_batch(self):
         parent = _mock_span(
@@ -441,7 +446,12 @@ class TestOrphanAsRoot:
             0xBBB, "016x"
         )
 
-    def test_multiple_orphans_same_trace_emit_one_trace(self):
+    def test_only_otel_rootless_spans_emit_a_trace_record(self):
+        # Two spans both have a parent, neither is a true OTel root → no
+        # trace record is emitted from this batch. If their real parent
+        # ever arrives it will emit the trace; if it never does (parent
+        # was filtered), ingestion-side reconciliation handles the orphan
+        # tree.
         spans = [
             _mock_span(
                 trace_id=0xAAA,
@@ -457,9 +467,10 @@ class TestOrphanAsRoot:
             ),
         ]
         records = transform_spans(spans, "wid", "claim")
-        assert len([r for r in records if r["entity_type"] == "trace"]) == 1
+        assert len([r for r in records if r["entity_type"] == "trace"]) == 0
         for obs in _observations(records):
-            assert obs["parent_observation_id"] is None
+            assert obs["parent_observation_id"] == format(0xBBB, "016x")
+            assert obs["trace_name"] is None
 
 
 class TestObservationTypePassThrough:

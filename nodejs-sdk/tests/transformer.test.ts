@@ -501,8 +501,12 @@ describe("root + resource mapping", () => {
   });
 });
 
-describe("orphan-as-root (per-batch detection)", () => {
-  it("orphan span (parent absent from batch) is promoted to root", () => {
+describe("root detection (OTel-local only)", () => {
+  it("span with a parent ID always carries it through, never promoted to root", () => {
+    // Cross-batch case: the parent span is being flushed in a later batch
+    // (or was filtered out upstream). Either way the SDK leaves
+    // `parent_observation_id` pointing at the real OTel span ID and lets
+    // ingestion reconcile when (or whether) the parent arrives.
     const records = transformSpans(
       [
         makeSpan({
@@ -515,11 +519,12 @@ describe("orphan-as-root (per-batch detection)", () => {
       "wid",
       "claim",
     );
-    const t = trace(records);
-    expect(t.id).toBe("aaa00000000000000000000000000000");
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(0);
     const [obs] = observations(records);
-    expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
-    expect((obs as Record<string, unknown>).trace_name).toBe("span");
+    expect((obs as Record<string, unknown>).parent_observation_id).toBe(
+      "bbb0000000000000",
+    );
+    expect((obs as Record<string, unknown>).trace_name).toBeNull();
   });
 
   it("child span is unchanged when its parent IS in the same batch", () => {
@@ -544,7 +549,11 @@ describe("orphan-as-root (per-batch detection)", () => {
     );
   });
 
-  it("multiple orphans sharing a trace_id collapse to a single trace record", () => {
+  it("only OTel-rootless spans emit a trace record", () => {
+    // Two spans both have a parent, neither is a true OTel root → no trace
+    // record is emitted from this batch. If their real parent ever arrives
+    // it will emit the trace. If it never does (parent was filtered),
+    // ingestion-side reconciliation handles the orphan tree.
     const records = transformSpans(
       [
         makeSpan({
@@ -561,9 +570,12 @@ describe("orphan-as-root (per-batch detection)", () => {
       "wid",
       "claim",
     );
-    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(1);
+    expect(records.filter((r) => r.entity_type === "trace")).toHaveLength(0);
     for (const obs of observations(records)) {
-      expect((obs as Record<string, unknown>).parent_observation_id).toBeNull();
+      expect((obs as Record<string, unknown>).parent_observation_id).toBe(
+        "bbb0000000000000",
+      );
+      expect((obs as Record<string, unknown>).trace_name).toBeNull();
     }
   });
 });
