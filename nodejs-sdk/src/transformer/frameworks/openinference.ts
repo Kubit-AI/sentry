@@ -123,6 +123,25 @@ export const adapter = makeAdapter({
     // provider lives inside the AIMessage envelope on output.value.
     return findLangchainModelProvider(attrs["output.value"]);
   },
+  resolveProvidedModel(attrs) {
+    // LangChain via OpenInference doesn't emit `llm.request.model` — the
+    // user-requested model is hidden inside the JSON-serialised
+    // `llm.invocation_parameters` blob (keys `model` / `model_name`). Pulling
+    // it out preserves the OTel-spec request/response model split:
+    // `llm.model_name` carries the API-returned versioned name
+    // (`gpt-4.1-mini-2025-04-14`), `provided_model_name` carries what the
+    // caller asked for (`gpt-4.1-mini`).
+    const raw = attrs["llm.invocation_parameters"];
+    if (typeof raw !== "string") return null;
+    const parsed = safeJsonParse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const obj = parsed as Record<string, unknown>;
+    for (const key of ["model", "model_name"]) {
+      const v = obj[key];
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+    return null;
+  },
   unpackMessages(attrs) {
     return [
       unpackIndexed(attrs, INPUT_INDEX_PREFIX),

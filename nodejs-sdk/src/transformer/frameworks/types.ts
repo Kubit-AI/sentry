@@ -146,6 +146,15 @@ export interface FrameworkAdapter {
   resolveObservationType?(attrs: Record<string, unknown>): string | null;
   resolveObservationTypeFallback?(attrs: Record<string, unknown>): string | null;
   resolveProvider?(attrs: Record<string, unknown>): string | null;
+  /**
+   * Return the user-requested model name (OTel `gen_ai.request.model`) from
+   * blob-form sources where the adapter's `PROVIDED_MODEL_ATTRS` aliases
+   * can't reach. Notably, OpenInference's LangChain instrumentor doesn't
+   * emit `llm.request.model`; the requested model is hidden inside the
+   * JSON-serialised `llm.invocation_parameters` blob. Fires only after the
+   * `PROVIDED_MODEL_ATTRS` alias chain misses, so explicit aliases win.
+   */
+  resolveProvidedModel?(attrs: Record<string, unknown>): string | null;
   parseUsageBlobs?(attrs: Record<string, unknown>, usageDetails: Record<string, unknown>): void;
   parseCostBlobs?(attrs: Record<string, unknown>, costDetails: Record<string, unknown>): void;
   buildParams?(attrs: Record<string, unknown>, merged: Record<string, unknown>): void;

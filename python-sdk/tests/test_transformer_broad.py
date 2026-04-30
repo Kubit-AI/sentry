@@ -239,6 +239,74 @@ class TestOpenInferenceSchema:
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["model_parameters"] == {"temperature": 0.1, "max_tokens": 1000}
 
+    def test_openinference_provided_model_extracted_from_invocation_parameters(self):
+        # The OTel GenAI semconv mandates a request/response model split.
+        # OpenInference's LangChain instrumentor doesn't emit
+        # ``llm.request.model``; the user-requested model is buried inside
+        # the JSON-stringified ``llm.invocation_parameters`` blob (key
+        # ``model``). ``llm.model_name`` carries the API-returned versioned
+        # name (``gpt-4.1-mini-2025-04-14``). Without extracting from the
+        # blob, ``provided_model_name`` is null and the request/response
+        # split is lost.
+        attrs = self._attrs()
+        attrs["llm.model_name"] = "gpt-4.1-mini-2025-04-14"
+        attrs["llm.invocation_parameters"] = json.dumps({
+            "model": "gpt-4.1-mini",
+            "model_name": "gpt-4.1-mini",
+            "stream": False,
+        })
+        span = _mock_span(
+            scope_name="openinference.instrumentation.langchain",
+            attributes=attrs,
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["model"] == "gpt-4.1-mini-2025-04-14"
+        assert obs["provided_model_name"] == "gpt-4.1-mini"
+
+    def test_openinference_provided_model_falls_back_to_model_name_key(self):
+        # Some LangChain providers populate ``model_name`` in
+        # ``invocation_parameters`` but not the OpenAI-canonical ``model``
+        # key. Both should be probed, in that priority order.
+        attrs = self._attrs()
+        attrs["llm.invocation_parameters"] = json.dumps({
+            "model_name": "claude-3-5-sonnet",
+            "max_tokens": 1024,
+        })
+        span = _mock_span(
+            scope_name="openinference.instrumentation.langchain",
+            attributes=attrs,
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provided_model_name"] == "claude-3-5-sonnet"
+
+    def test_openinference_provided_model_null_when_blob_has_no_model_key(self):
+        # Defensive: an invocation_parameters blob without a model key
+        # (rare, but possible for ad-hoc callers) should yield null rather
+        # than crash or return junk.
+        attrs = self._attrs()
+        attrs["llm.invocation_parameters"] = json.dumps({"temperature": 0.1})
+        span = _mock_span(
+            scope_name="openinference.instrumentation.langchain",
+            attributes=attrs,
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provided_model_name"] is None
+
+    def test_openinference_explicit_request_model_alias_wins_over_blob(self):
+        # If ``llm.request.model`` is explicitly set (e.g. by a custom
+        # collector enrichment processor), it should win over the
+        # blob-derived value — explicit alias has priority over inferred
+        # extraction.
+        attrs = self._attrs()
+        attrs["llm.request.model"] = "explicit-request-model"
+        attrs["llm.invocation_parameters"] = json.dumps({"model": "blob-model"})
+        span = _mock_span(
+            scope_name="openinference.instrumentation.langchain",
+            attributes=attrs,
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provided_model_name"] == "explicit-request-model"
+
     def test_openinference_cost_captured(self):
         span = _mock_span(attributes=self._attrs())
         [obs] = _observations(transform_spans([span], "wid", "claim"))

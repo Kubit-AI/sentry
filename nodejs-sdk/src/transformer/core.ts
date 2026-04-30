@@ -259,7 +259,7 @@ export function transformSpans(
     }
 
     const model = firstAttr(spanAttrs, MODEL_ATTRS) ?? null;
-    const providedModelName = firstAttr(spanAttrs, PROVIDED_MODEL_ATTRS) ?? null;
+    const providedModelName = resolveProvidedModel(spanAttrs);
     const [eventInput, eventOutput] = unpackGenAiEvents(span);
     const inputText = resolveInput(spanAttrs) ?? eventInput ?? null;
     const outputText = resolveOutput(spanAttrs) ?? eventOutput ?? null;
@@ -432,6 +432,25 @@ function resolveProvider(spanAttrs: Record<string, unknown>): string | null {
     const val = spanAttrs[attr];
     if (val === undefined || val === null) continue;
     return typeof val === "string" ? val : String(val);
+  }
+  return null;
+}
+
+// Return the user-requested model name (OTel `gen_ai.request.model`).
+// Explicit `PROVIDED_MODEL_ATTRS` aliases fire first — an explicitly-set
+// request-model attribute wins over inferred extraction. If the alias chain
+// misses, framework `resolveProvidedModel` hooks pull from blob-form sources
+// (e.g. OpenInference's `llm.invocation_parameters`, where LangChain hides
+// the requested model name).
+function resolveProvidedModel(spanAttrs: Record<string, unknown>): string | null {
+  const aliasHit = firstAttr(spanAttrs, PROVIDED_MODEL_ATTRS);
+  if (aliasHit !== undefined && aliasHit !== null) {
+    return typeof aliasHit === "string" ? aliasHit : String(aliasHit);
+  }
+  for (const fw of FRAMEWORKS) {
+    if (!fw.resolveProvidedModel) continue;
+    const resolved = fw.resolveProvidedModel(spanAttrs);
+    if (resolved) return resolved;
   }
   return null;
 }

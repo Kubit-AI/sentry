@@ -238,7 +238,7 @@ def transform_spans(
 
         # ── Enriched observation record (every span) ─────────────────────
         model = first_attr(span_attrs, MODEL_ATTRS)
-        provided_model_name = first_attr(span_attrs, PROVIDED_MODEL_ATTRS)
+        provided_model_name = _resolve_provided_model(span_attrs)
         input_text = _resolve_input(span_attrs) or event_input
         output_text = _resolve_output(span_attrs) or event_output
         input_tokens = safe_int(first_attr(span_attrs, INPUT_TOKENS_ATTRS))
@@ -475,6 +475,28 @@ def _resolve_provider(span_attrs: dict) -> Optional[str]:
         if val is None:
             continue
         return val if isinstance(val, str) else str(val)
+    return None
+
+
+def _resolve_provided_model(span_attrs: dict) -> Optional[str]:
+    """Return the user-requested model name (OTel ``gen_ai.request.model``).
+
+    Explicit ``PROVIDED_MODEL_ATTRS`` aliases fire first — an explicitly-set
+    request-model attribute wins over inferred extraction. If the alias
+    chain misses, framework ``resolve_provided_model`` hooks pull from
+    blob-form sources (e.g. OpenInference's ``llm.invocation_parameters``,
+    where LangChain hides the requested model name).
+    """
+    val = first_attr(span_attrs, PROVIDED_MODEL_ATTRS)
+    if val is not None:
+        return val if isinstance(val, str) else str(val)
+    for fw in FRAMEWORKS:
+        resolve = getattr(fw, "resolve_provided_model", None)
+        if resolve is None:
+            continue
+        resolved = resolve(span_attrs)
+        if resolved:
+            return resolved
     return None
 
 

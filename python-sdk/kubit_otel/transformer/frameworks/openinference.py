@@ -185,6 +185,28 @@ def resolve_provider(span_attrs: dict) -> Optional[str]:
     return find_langchain_model_provider(span_attrs.get("output.value"))
 
 
+def resolve_provided_model(span_attrs: dict) -> Optional[str]:
+    """LangChain via OpenInference doesn't emit ``llm.request.model`` — the
+    user-requested model is hidden inside the JSON-serialised
+    ``llm.invocation_parameters`` blob (keys ``model`` / ``model_name``).
+    Pulling it out preserves the OTel-spec request/response model split:
+    ``llm.model_name`` carries the API-returned versioned name
+    (``gpt-4.1-mini-2025-04-14``), ``provided_model_name`` carries what the
+    caller asked for (``gpt-4.1-mini``).
+    """
+    raw = span_attrs.get("llm.invocation_parameters")
+    if not isinstance(raw, str):
+        return None
+    parsed = safe_json_parse(raw)
+    if not isinstance(parsed, dict):
+        return None
+    for key in ("model", "model_name"):
+        v = parsed.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
 _TOOL_DEF_RE = re.compile(r"^llm\.tools\.(\d+)\.tool\.json_schema$")
 
 

@@ -44,6 +44,7 @@ export function makeAdapter(overrides: AdapterOverrides): FrameworkAdapter {
     resolveObservationType: overrides.resolveObservationType,
     resolveObservationTypeFallback: overrides.resolveObservationTypeFallback,
     resolveProvider: overrides.resolveProvider,
+    resolveProvidedModel: overrides.resolveProvidedModel,
     parseUsageBlobs: overrides.parseUsageBlobs,
     parseCostBlobs: overrides.parseCostBlobs,
     buildParams: overrides.buildParams,
