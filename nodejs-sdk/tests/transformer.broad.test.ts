@@ -991,6 +991,149 @@ describe("OpenInference (LangChain)", () => {
     ]);
   });
 
+  it("TOOL span: Python-repr input.value (single-quoted) is parsed to a dict", () => {
+    // OpenInference's Python LangChain instrumentor writes `input.value` for
+    // a TOOL span as `str(args_dict)` (Python repr — single-quoted strings,
+    // `True`/`False`/`None` literals) rather than `json.dumps`, despite
+    // labelling `input.mime_type` as `application/json`. `JSON.parse` rejects
+    // that, so without a Python-literal fallback `arguments` lands as the raw
+    // repr string — asymmetric with the GENERATION-side parsed-object shape
+    // and unparseable downstream. Parity with the Python SDK's
+    // `safe_python_literal_parse` (`ast.literal_eval`).
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "tavily_search",
+              "input.value": "{'queries': ['Alphabet 2031', 'GOOGL outlook']}",
+              "output.value": "results",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "tavily_search",
+            arguments: { queries: ["Alphabet 2031", "GOOGL outlook"] },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("TOOL span: Python-repr with apostrophes and True/False/None literals", () => {
+    // When a Python repr string contains an apostrophe Python switches the
+    // surrounding quote to `"`, producing a mixed-quote payload. Also check
+    // that `True`/`False`/`None` literals decode to JS `true`/`false`/`null`.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "think_tool",
+              "input.value":
+                "{'reflection': \"I've reviewed Alphabet's outlook\", 'done': True, 'note': None}",
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "think_tool",
+            arguments: {
+              reflection: "I've reviewed Alphabet's outlook",
+              done: true,
+              note: null,
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("TOOL span: input.value that is neither JSON nor a Python literal stays as raw string", () => {
+    // If a payload is neither valid JSON nor a parseable Python literal
+    // (e.g. a free-form sentence emitted by some custom instrumentor), the
+    // synthesizer should preserve the raw string rather than crash or drop
+    // it. Mirrors the existing JSON-only fallback semantics.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "echo",
+              "input.value": "not parseable as anything",
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "echo",
+            arguments: "not parseable as anything",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("TOOL span: empty input.value omits the arguments field", () => {
+    // Some instrumentors emit `input.value` as `""` to signal "no
+    // arguments". Treat that the same as a missing attribute (drop the
+    // `arguments` field) instead of stamping `"arguments": ""`, which is
+    // asymmetric with the GENERATION-side `"arguments": {}` shape and
+    // confuses downstream consumers expecting an object when present.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            attrs: {
+              "openinference.span.kind": "TOOL",
+              "tool.name": "no_args_tool",
+              "input.value": "",
+              "output.value": "ok",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "tool_call", name: "no_args_tool" }],
+      },
+    ]);
+  });
+
   it("TOOL span: empty tool.name does not synthesize a tool_call", () => {
     // Guard against an instrumentation that emits `tool.name = ""`: the
     // synthesizer must not produce a `tool_call` part with an empty name

@@ -790,6 +790,104 @@ class TestOpenInferenceLangChain:
             "parts": [{"type": "tool_call_response", "response": 85}],
         }]
 
+    def test_tool_span_with_python_repr_input_value(self):
+        # OpenInference's Python LangChain instrumentor writes ``input.value``
+        # for a TOOL span as ``str(args_dict)`` (Python ``repr``-style with
+        # single-quoted strings, ``True``/``False``/``None`` literals) rather
+        # than ``json.dumps``, despite labelling ``input.mime_type`` as
+        # ``application/json``. ``json.loads`` rejects that, so without a
+        # fallback ``arguments`` ends up as the raw repr string instead of a
+        # parsed object — asymmetric with the GENERATION-side shape and
+        # unparseable downstream. ``ast.literal_eval`` recovers the dict
+        # safely (no code execution, only Python literal nodes).
+        span = _mock_span(
+            attributes={
+                "openinference.span.kind": "TOOL",
+                "tool.name": "tavily_search",
+                "input.value": "{'queries': ['Alphabet 2031', 'GOOGL outlook']}",
+                "output.value": "results",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["input"] == [{
+            "role": "assistant",
+            "parts": [{
+                "type": "tool_call",
+                "name": "tavily_search",
+                "arguments": {"queries": ["Alphabet 2031", "GOOGL outlook"]},
+            }],
+        }]
+
+    def test_tool_span_with_python_repr_apostrophes_and_literals(self):
+        # When a Python repr string contains an apostrophe Python switches the
+        # surrounding quote to ``"``, producing a mixed-quote payload. Also
+        # check that ``True``/``False``/``None`` literals decode correctly.
+        # ``ast.literal_eval`` handles both cleanly.
+        span = _mock_span(
+            attributes={
+                "openinference.span.kind": "TOOL",
+                "tool.name": "think_tool",
+                "input.value": "{'reflection': \"I've reviewed Alphabet's outlook\", 'done': True, 'note': None}",
+                "output.value": "ok",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["input"] == [{
+            "role": "assistant",
+            "parts": [{
+                "type": "tool_call",
+                "name": "think_tool",
+                "arguments": {
+                    "reflection": "I've reviewed Alphabet's outlook",
+                    "done": True,
+                    "note": None,
+                },
+            }],
+        }]
+
+    def test_tool_span_input_value_unparseable_falls_back_to_raw_string(self):
+        # If a payload is neither valid JSON nor a parseable Python literal
+        # (e.g. a free-form sentence emitted by some custom instrumentor),
+        # the synthesizer should preserve the raw string rather than crash or
+        # discard it. Mirrors the existing JSON-only fallback semantics.
+        span = _mock_span(
+            attributes={
+                "openinference.span.kind": "TOOL",
+                "tool.name": "echo",
+                "input.value": "not parseable as anything",
+                "output.value": "ok",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["input"] == [{
+            "role": "assistant",
+            "parts": [{
+                "type": "tool_call",
+                "name": "echo",
+                "arguments": "not parseable as anything",
+            }],
+        }]
+
+    def test_tool_span_empty_string_input_value_omits_arguments(self):
+        # Some instrumentors emit ``input.value`` as ``""`` to signal "no
+        # arguments". Treat that the same as a missing attribute (drop the
+        # ``arguments`` field) instead of stamping ``"arguments": ""``, which
+        # is asymmetric with the GENERATION-side ``"arguments": {}`` shape and
+        # confuses downstream consumers expecting an object when present.
+        span = _mock_span(
+            attributes={
+                "openinference.span.kind": "TOOL",
+                "tool.name": "no_args_tool",
+                "input.value": "",
+                "output.value": "ok",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["input"] == [{
+            "role": "assistant",
+            "parts": [{"type": "tool_call", "name": "no_args_tool"}],
+        }]
+
     def test_tool_span_with_empty_tool_name_does_not_synthesize(self):
         # Guard against an instrumentation that emits ``tool.name = ""``: the
         # synthesizer must not produce a ``tool_call`` part with an empty name

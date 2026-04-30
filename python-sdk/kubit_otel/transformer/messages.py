@@ -15,6 +15,7 @@ Canonical shape per the upstream JSON schemas:
 
 from __future__ import annotations
 
+import ast
 import json
 from typing import Any, Optional
 
@@ -114,6 +115,21 @@ def safe_json_parse(raw: Any) -> Any:
     try:
         return json.loads(raw)
     except (ValueError, TypeError):
+        return None
+
+
+def safe_python_literal_parse(raw: Any) -> Any:
+    # ``ast.literal_eval`` accepts only Python literal nodes (dicts, lists,
+    # tuples, sets, numbers, strings, bools, None) — no code execution. It is
+    # the safe complement to ``safe_json_parse`` for payloads serialised via
+    # ``str(obj)`` / ``repr(obj)`` (notably OpenInference's Python LangChain
+    # instrumentor, which writes ``input.value`` for TOOL spans as
+    # ``str(args_dict)`` rather than ``json.dumps``).
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return ast.literal_eval(raw)
+    except (ValueError, SyntaxError, MemoryError, TypeError):
         return None
 
 

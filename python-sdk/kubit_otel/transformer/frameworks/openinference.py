@@ -24,6 +24,7 @@ from ..messages import (
     generic_part,
     langchain_envelope_to_canonical,
     safe_json_parse,
+    safe_python_literal_parse,
     tool_call_part,
     tool_call_response_part,
     unpack_indexed_messages,
@@ -297,10 +298,23 @@ def _synthesize_tool_span_messages(span_attrs: dict) -> tuple[Optional[list], Op
     if not isinstance(tool_name, str) or not tool_name:
         return None, None
 
+    # OpenInference's Python LangChain instrumentor serialises ``input.value``
+    # as ``str(args_dict)`` (Python repr — single-quoted strings, ``True``/
+    # ``False``/``None`` literals) rather than ``json.dumps``, despite stamping
+    # ``input.mime_type`` as ``application/json``. ``json.loads`` rejects that,
+    # so without a Python-literal fallback ``arguments`` would land as a raw
+    # repr string — asymmetric with the GENERATION-side parsed-object shape
+    # and unparseable downstream.
     raw_in = span_attrs.get("input.value")
     if isinstance(raw_in, str):
         parsed_in = safe_json_parse(raw_in)
         if parsed_in is None:
+            parsed_in = safe_python_literal_parse(raw_in)
+        # Treat an empty ``input.value`` like a missing attribute — let the
+        # ``args is not None`` guard in ``tool_call_part`` drop the field
+        # rather than stamping ``"arguments": ""``, which is asymmetric with
+        # the object-typed empty form (``"arguments": {}``).
+        if parsed_in is None and raw_in:
             parsed_in = raw_in
     else:
         parsed_in = raw_in
@@ -312,6 +326,8 @@ def _synthesize_tool_span_messages(span_attrs: dict) -> tuple[Optional[list], Op
     raw_out = span_attrs.get("output.value")
     if isinstance(raw_out, str):
         parsed_out = safe_json_parse(raw_out)
+        if parsed_out is None:
+            parsed_out = safe_python_literal_parse(raw_out)
         if parsed_out is None:
             parsed_out = raw_out
     else:

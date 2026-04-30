@@ -17,6 +17,7 @@ import {
   genericPart,
   langchainEnvelopeToCanonical,
   safeJsonParse,
+  safePythonLiteralParse,
   toolCallPart,
   toolCallResponsePart,
   unpackIndexedMessages,
@@ -212,9 +213,20 @@ function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {
     : null;
   if (!toolName) return { input: null, output: null };
 
+  // OpenInference's Python LangChain instrumentor serialises `input.value` as
+  // `str(args_dict)` (Python repr — single-quoted strings, `True`/`False`/
+  // `None` literals) rather than `JSON.stringify`, despite stamping
+  // `input.mime_type` as `application/json`. `JSON.parse` rejects that, so
+  // without a Python-literal fallback `arguments` would land as a raw repr
+  // string — asymmetric with the GENERATION-side parsed-object shape and
+  // unparseable downstream.
   const rawIn = attrs["input.value"];
+  // Treat an empty `input.value` like a missing attribute — `toolCallPart`'s
+  // `args != null` guard drops the field rather than stamping
+  // `"arguments": ""`, which is asymmetric with the object-typed empty form
+  // (`"arguments": {}`).
   const argsParsed = typeof rawIn === "string"
-    ? safeJsonParse(rawIn) ?? rawIn
+    ? safeJsonParse(rawIn) ?? safePythonLiteralParse(rawIn) ?? (rawIn === "" ? null : rawIn)
     : rawIn;
   const input: Message[] = [{
     role: "assistant",
@@ -223,7 +235,7 @@ function synthesizeToolSpanMessages(attrs: Record<string, unknown>): {
 
   const rawOut = attrs["output.value"];
   const parsedOut = typeof rawOut === "string"
-    ? safeJsonParse(rawOut) ?? rawOut
+    ? safeJsonParse(rawOut) ?? safePythonLiteralParse(rawOut) ?? rawOut
     : rawOut;
   let output: Message[] | null = null;
   // First try: full LangChain envelope (handles {output:<ToolMessage>}, bare

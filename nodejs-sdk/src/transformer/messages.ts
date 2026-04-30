@@ -120,6 +120,116 @@ export function safeJsonParse(raw: unknown): unknown {
 }
 
 /**
+ * Best-effort parse for payloads serialised via Python `str(obj)` / `repr(obj)`
+ * — single-quoted strings, mixed-quote strings (Python flips the surrounding
+ * quote when a string contains an apostrophe), `True`/`False`/`None` literals.
+ *
+ * Notably, OpenInference's Python LangChain instrumentor writes `input.value`
+ * for TOOL spans as `str(args_dict)` rather than `JSON.stringify`, despite
+ * stamping `input.mime_type` as `application/json`. Without this fallback,
+ * `arguments` lands as a raw repr string instead of a parsed object.
+ *
+ * Returns `null` (rather than the raw string) when the input cannot be
+ * recovered, so callers can chain `safeJsonParse(x) ?? safePythonLiteralParse(x) ?? x`.
+ *
+ * Parity with the Python SDK's `safe_python_literal_parse` (`ast.literal_eval`).
+ */
+export function safePythonLiteralParse(raw: unknown): unknown {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  const converted = pythonReprToJson(raw);
+  if (converted === null) return null;
+  try {
+    return JSON.parse(converted);
+  } catch {
+    return null;
+  }
+}
+
+function isIdentChar(c: string | undefined): boolean {
+  if (!c) return false;
+  return (c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || (c >= "0" && c <= "9") || c === "_";
+}
+
+function pythonReprToJson(s: string): string | null {
+  // Walk the input as a character stream, copying double-quoted strings
+  // verbatim, transcoding single-quoted strings to JSON form, and rewriting
+  // bare `True` / `False` / `None` tokens to their JSON equivalents. Any
+  // unterminated string is treated as unparseable (returns null).
+  let out = "";
+  let i = 0;
+  const n = s.length;
+  while (i < n) {
+    const c = s[i];
+    if (c === '"') {
+      out += '"';
+      i++;
+      while (i < n && s[i] !== '"') {
+        if (s[i] === "\\" && i + 1 < n) {
+          out += s[i] + s[i + 1];
+          i += 2;
+        } else {
+          out += s[i];
+          i++;
+        }
+      }
+      if (i >= n) return null;
+      out += '"';
+      i++;
+    } else if (c === "'") {
+      out += '"';
+      i++;
+      while (i < n && s[i] !== "'") {
+        if (s[i] === "\\" && i + 1 < n) {
+          // `\'` becomes a bare `'` (JSON doesn't define `\'`); other escapes
+          // pass through unchanged so JSON-recognised ones keep their meaning.
+          if (s[i + 1] === "'") {
+            out += "'";
+            i += 2;
+          } else {
+            out += s[i] + s[i + 1];
+            i += 2;
+          }
+        } else if (s[i] === '"') {
+          out += '\\"';
+          i++;
+        } else {
+          out += s[i];
+          i++;
+        }
+      }
+      if (i >= n) return null;
+      out += '"';
+      i++;
+    } else if (
+      s.startsWith("True", i) &&
+      !isIdentChar(s[i - 1]) &&
+      !isIdentChar(s[i + 4])
+    ) {
+      out += "true";
+      i += 4;
+    } else if (
+      s.startsWith("False", i) &&
+      !isIdentChar(s[i - 1]) &&
+      !isIdentChar(s[i + 5])
+    ) {
+      out += "false";
+      i += 5;
+    } else if (
+      s.startsWith("None", i) &&
+      !isIdentChar(s[i - 1]) &&
+      !isIdentChar(s[i + 4])
+    ) {
+      out += "null";
+      i += 4;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * Render any value as a string suitable for wrapping in a `TextPart`.
  * Strings pass through; objects/arrays JSON-stringify; primitives `String()`.
  */
