@@ -74,6 +74,11 @@ KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES = frozenset(
         # Traceloop / OpenLLMetry SDK workflow + task decorator spans.
         "traceloop.tracer",                        # Python SDK tracer name
         "@traceloop",                              # JS SDK package prefix (parity with Node)
+        # Mastra AI framework — covers ``@mastra/core``,
+        # ``@mastra/otel-exporter``, and any other tracer that ships under
+        # the ``@mastra/*`` scope (including in-tree Kubit emitters apps
+        # wire under e.g. ``@mastra/kubit``).
+        "@mastra",
     }
 )
 
@@ -130,9 +135,25 @@ def is_langgraph_internal_span(span: ReadableSpan) -> bool:
     return name.startswith("ChannelWrite") or name in ("__start__", "__end__")
 
 
+def is_mastra_internal_span(span: ReadableSpan) -> bool:
+    """Return whether the span is a Mastra ``model_chunk`` stream-coordination span.
+
+    Mastra emits one ``mastra.span.type=model_chunk`` span per streamed
+    token-chunk; the payload is always ``mastra.model_chunk.output: "{}"`` —
+    pure stream coordination, no LLM data. Mastra's own Sentry exporter skips
+    them too. The default Kubit filter drops them on ingest.
+    """
+    attrs = getattr(span, "attributes", None)
+    if attrs is None:
+        return False
+    return attrs.get("mastra.span.type") == "model_chunk"
+
+
 def is_default_export_span(span: ReadableSpan) -> bool:
     """Default Kubit export predicate — keeps LLM-relevant spans only."""
     if is_langgraph_internal_span(span):
+        return False
+    if is_mastra_internal_span(span):
         return False
     return (
         is_kubit_span(span)

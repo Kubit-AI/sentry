@@ -18,6 +18,16 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 from .frameworks import (
     langfuse as _langfuse,
+    mastra as _mastra,
+)
+
+# ``completion_start_time`` is the first-chunk timestamp emitters (Langfuse,
+# Mastra) record on streaming generations. Core uses it directly for the
+# ``completion_start_time`` field and as the third-tier source for TTFT
+# derivation. Langfuse priority is preserved by ordering it first.
+_COMPLETION_START_ATTRS = (
+    *_langfuse.COMPLETION_START_ATTRS,
+    *_mastra.COMPLETION_START_ATTRS,
 )
 from .helpers import (
     decode_json_string_attr,
@@ -342,7 +352,7 @@ def transform_spans(
         obs_type = _resolve_observation_type(span, span_attrs, model)
         provider = _resolve_provider(span_attrs)
         completion_start_time = decode_json_string_attr(
-            first_attr(span_attrs, _langfuse.COMPLETION_START_ATTRS)
+            first_attr(span_attrs, _COMPLETION_START_ATTRS)
         )
 
         records.append(_with_claim({

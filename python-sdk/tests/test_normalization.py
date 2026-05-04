@@ -1621,3 +1621,186 @@ class TestNonLLMSpans:
         r = _obs(_transform(span))
         assert r["input"] is None
         assert r["output"] is None
+
+
+# ── Mastra ─────────────────────────────────────────────────────────────────
+
+
+class TestMastraNormalizer:
+    def test_agent_run_user_prompt_and_parsed_assistant_text(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "agent_run",
+                "mastra.agent_run.input": "what is 2+2?",
+                "mastra.agent_run.output": json.dumps(
+                    {"text": "It is 4.", "object": {"answer": 4}}
+                ),
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "what is 2+2?"}]}
+        ]
+        assert r["output"] == [
+            {"role": "assistant", "parts": [{"type": "text", "content": "It is 4."}]}
+        ]
+
+    def test_agent_run_falls_back_to_object_when_text_empty(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "agent_run",
+                "mastra.agent_run.input": "do the thing",
+                "mastra.agent_run.output": json.dumps(
+                    {"text": "", "object": {"result": "done"}}
+                ),
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["output"][0]["parts"][0] == {
+            "type": "text",
+            "content": '{"result": "done"}',
+        }
+
+    def test_processor_run_message_list_with_system_messages(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "processor_run",
+                "mastra.processor_run.output": json.dumps(
+                    {
+                        "phase": "outputStep",
+                        "messageList": {
+                            "systemMessages": [
+                                {"role": "system", "content": "Be terse."}
+                            ],
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [{"type": "text", "text": "hi"}],
+                                }
+                            ],
+                        },
+                    }
+                ),
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["output"] == [
+            {"role": "system", "parts": [{"type": "text", "content": "Be terse."}]},
+            {"role": "user", "parts": [{"type": "text", "content": "hi"}]},
+        ]
+
+    def test_model_step_input_array_and_output_with_tool_calls(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "model_step",
+                "mastra.model_step.input": json.dumps(
+                    [{"role": "user", "parts": [{"text": "calc 2+2"}]}]
+                ),
+                "mastra.model_step.output": json.dumps(
+                    {
+                        "text": "4",
+                        "toolCalls": [
+                            {"toolName": "calc", "args": {"expr": "2+2"}}
+                        ],
+                    }
+                ),
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["input"][0]["role"] == "user"
+        assert r["input"][0]["parts"][0] == {"type": "text", "content": "calc 2+2"}
+        assert r["output"][0]["parts"] == [
+            {"type": "text", "content": "4"},
+            {"type": "tool_call", "name": "calc", "arguments": {"expr": "2+2"}},
+        ]
+
+    def test_tool_call_request_and_response_with_shared_id(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "tool_call",
+                "mastra.tool_call.toolId": "lookup",
+                "mastra.tool_call.toolCallId": "id_42",
+                "mastra.tool_call.input": json.dumps({"q": "abc"}),
+                "mastra.tool_call.output": json.dumps({"found": True}),
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["input"] == [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "name": "lookup",
+                        "id": "id_42",
+                        "arguments": {"q": "abc"},
+                    }
+                ],
+            }
+        ]
+        assert r["output"] == [
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "id_42",
+                        "response": {"found": True},
+                    }
+                ],
+            }
+        ]
+
+    def test_tool_call_without_tool_id_emits_null(self):
+        # Defensive: a tool_call span missing the toolId attr can't be
+        # canonicalised. The hook returns None on both sides rather than
+        # synthesising an unnamed tool call.
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "tool_call",
+                "mastra.tool_call.input": json.dumps({"q": "abc"}),
+                "mastra.tool_call.output": json.dumps({"found": True}),
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["input"] is None
+        assert r["output"] is None
+
+    def test_workflow_run_text_wraps_stringified_blob(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "workflow_run",
+                "mastra.workflow_run.input": json.dumps({"x": 1}),
+                "mastra.workflow_run.output": "ok",
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["input"][0] == {
+            "role": "user",
+            "parts": [{"type": "text", "content": '{"x": 1}'}],
+        }
+        assert r["output"][0] == {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "ok"}],
+        }
+
+    def test_model_chunk_routes_to_null(self):
+        # Belt-and-suspenders: even if a model_chunk span made it past the
+        # span filter, the normalizer returns None rather than emitting noise.
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attrs={
+                "mastra.span.type": "model_chunk",
+                "mastra.model_chunk.output": "{}",
+            },
+        )
+        r = _obs(_transform(span))
+        assert r["input"] is None
+        assert r["output"] is None

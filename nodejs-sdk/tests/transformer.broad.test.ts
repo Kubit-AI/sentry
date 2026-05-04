@@ -1443,3 +1443,355 @@ describe("Cross-vendor cache priority", () => {
     expect(usage.cache_read_input).toBe(100);
   });
 });
+
+describe("Mastra schema", () => {
+  // Fixtures match the Mastra `mastra.*` attribute shapes observed in real
+  // exports from a Mastra-emitting app (see `~/Downloads/regulus/*.json`
+  // ingestion analysis): per-span-type input/output keys + run-context
+  // metadata + a `mastra.completion_start_time` ISO timestamp on streaming
+  // GENERATIONs. Spans were captured under instrumentation scope
+  // `@mastra/kubit` — an in-tree Kubit emitter, not a published package.
+
+  it("AGENT_RUN: projects user prompt into canonical input + assistant text into output", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "agent_run",
+              "gen_ai.operation.name": "invoke_agent",
+              "gen_ai.system_instructions": "Be helpful.",
+              "mastra.agent_run.input": "show me daily tokens",
+              "mastra.agent_run.output": JSON.stringify({
+                text: '{"responseAction":"CREATE_QUERY"}',
+                object: { responseAction: "CREATE_QUERY" },
+                files: [],
+              }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("INVOKE_AGENT");
+    // gen_ai.system_instructions injection is core's job; the adapter is
+    // responsible for surfacing the user prompt and the assistant text.
+    const input = obs.input as Array<{ role: string; parts: Array<{ content: string }> }>;
+    expect(input.some((m) => m.role === "system")).toBe(true);
+    expect(input.find((m) => m.role === "user")?.parts[0].content).toBe(
+      "show me daily tokens",
+    );
+    expect(obs.output).toEqual([
+      {
+        role: "assistant",
+        parts: [{ type: "text", content: '{"responseAction":"CREATE_QUERY"}' }],
+      },
+    ]);
+  });
+
+  it("MODEL_GENERATION still routes through otelGenai (regression sanity)", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "model_generation",
+              "gen_ai.operation.name": "chat",
+              "gen_ai.request.model": "gemini-3-flash-preview",
+              "gen_ai.provider.name": "google",
+              "gen_ai.input.messages": JSON.stringify([
+                { role: "user", content: "hi" },
+              ]),
+              "gen_ai.output.messages": JSON.stringify([
+                { role: "assistant", content: "hello" },
+              ]),
+              "gen_ai.usage.input_tokens": 10,
+              "gen_ai.usage.output_tokens": 2,
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("GENERATION");
+    expect(obs.model).toBe("gemini-3-flash-preview");
+    expect(obs.provider).toBe("google");
+    expect(obs.usage_details).toEqual({ input: 10, output: 2, total: 12 });
+  });
+
+  it("MODEL_STEP: projects message-array input + {text, toolCalls} output and recovers model from modelMetadata", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "model_step",
+              "gen_ai.operation.name": "model_step",
+              "mastra.model_step.input": JSON.stringify([
+                { role: "user", parts: [{ text: "what's 2+2?" }] },
+              ]),
+              "mastra.model_step.output": JSON.stringify({
+                text: "It is 4.",
+                toolCalls: [
+                  {
+                    toolName: "calculator",
+                    toolCallId: "call_1",
+                    args: { expr: "2+2" },
+                  },
+                ],
+              }),
+              "mastra.metadata.modelMetadata": JSON.stringify({
+                modelId: "gemini-3-flash-preview",
+                modelVersion: "v2",
+                modelProvider: "google",
+              }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.provided_model_name).toBe("gemini-3-flash-preview");
+    expect(obs.provider).toBe("google");
+    const inputMsgs = obs.input as Array<{ role: string }>;
+    expect(inputMsgs[0].role).toBe("user");
+    const outputMsgs = obs.output as Array<{ role: string; parts: unknown[] }>;
+    expect(outputMsgs[0].role).toBe("assistant");
+    expect(outputMsgs[0].parts).toEqual([
+      { type: "text", content: "It is 4." },
+      {
+        type: "tool_call",
+        name: "calculator",
+        id: "call_1",
+        arguments: { expr: "2+2" },
+      },
+    ]);
+  });
+
+  it("PROCESSOR_RUN: unpacks messageList.systemMessages + messages", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "processor_run",
+              "gen_ai.operation.name": "processor_run",
+              "mastra.processor_run.output": JSON.stringify({
+                phase: "outputStep",
+                messageList: {
+                  systemMessages: [
+                    { role: "system", content: "Be precise." },
+                  ],
+                  messages: [
+                    {
+                      role: "user",
+                      content: [{ type: "text", text: "How many?" }],
+                    },
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: "Three." }],
+                    },
+                  ],
+                },
+              }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("PROCESSOR_RUN");
+    expect(obs.output).toEqual([
+      { role: "system", parts: [{ type: "text", content: "Be precise." }] },
+      { role: "user", parts: [{ type: "text", content: "How many?" }] },
+      { role: "assistant", parts: [{ type: "text", content: "Three." }] },
+    ]);
+  });
+
+  it("TOOL_CALL: projects toolId + input/output as tool_call/tool_call_response parts", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "tool_call",
+              "gen_ai.operation.name": "execute_tool",
+              "mastra.tool_call.toolId": "getWeather",
+              "mastra.tool_call.toolCallId": "call_xyz",
+              "mastra.tool_call.input": JSON.stringify({ city: "Paris" }),
+              "mastra.tool_call.output": JSON.stringify({ temp: 22 }),
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("TOOL");
+    expect(obs.tool_name).toBe("getWeather");
+    expect(obs.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "getWeather",
+            id: "call_xyz",
+            arguments: { city: "Paris" },
+          },
+        ],
+      },
+    ]);
+    expect(obs.output).toEqual([
+      {
+        role: "tool",
+        parts: [
+          { type: "tool_call_response", id: "call_xyz", response: { temp: 22 } },
+        ],
+      },
+    ]);
+  });
+
+  it("WORKFLOW_RUN: text-wraps stringified input/output blobs", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "workflow_run",
+              "gen_ai.operation.name": "workflow_run",
+              "mastra.workflow_run.input": JSON.stringify({ query: "hello" }),
+              "mastra.workflow_run.output": "done",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.type).toBe("WORKFLOW_RUN");
+    const inMsgs = obs.input as Array<{ role: string; parts: Array<{ content: string }> }>;
+    expect(inMsgs[0].role).toBe("user");
+    expect(inMsgs[0].parts[0].content).toBe('{"query":"hello"}');
+    expect(obs.output).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "done" }] },
+    ]);
+  });
+
+  it("derives time_to_first_token from mastra.completion_start_time", () => {
+    // span starts at 1_700_000_000 s; completion_start_time is +250 ms.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            startTime: [1_700_000_000, 0],
+            endTime: [1_700_000_002, 0],
+            attrs: {
+              "mastra.span.type": "model_generation",
+              "gen_ai.operation.name": "chat",
+              "gen_ai.request.model": "gemini-3-flash-preview",
+              "gen_ai.input.messages": JSON.stringify([
+                { role: "user", content: "hi" },
+              ]),
+              "mastra.completion_start_time": "2023-11-14T22:13:20.250Z",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.completion_start_time).toBe("2023-11-14T22:13:20.250Z");
+    expect(obs.time_to_first_token).toBe(250);
+  });
+
+  it("enrichMetadata hoists runId/orgId/workspaceId + parsed modelMetadata; leaves body in raw attrs", () => {
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "model_step",
+              "gen_ai.operation.name": "model_step",
+              "mastra.metadata.runId": "run-123",
+              "mastra.metadata.orgId": "org-456",
+              "mastra.metadata.workspaceId": "ws-789",
+              "mastra.metadata.modelMetadata": JSON.stringify({
+                modelId: "gemini",
+                modelVersion: "v2",
+                modelProvider: "google",
+              }),
+              "mastra.metadata.body": "{very-large-response-body}",
+              "mastra.metadata.headers": "{some-headers}",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    const md = obs.metadata as Record<string, unknown>;
+    expect(md.runId).toBe("run-123");
+    expect(md.orgId).toBe("org-456");
+    expect(md.workspaceId).toBe("ws-789");
+    expect(md.mastra_modelMetadata).toEqual({
+      modelId: "gemini",
+      modelVersion: "v2",
+      modelProvider: "google",
+    });
+    // body / headers must NOT appear at metadata top level (size + sensitivity).
+    expect(md["mastra.metadata.body"]).toBeUndefined();
+    expect(md.body).toBeUndefined();
+    expect(md.headers).toBeUndefined();
+    // They remain visible in the raw `attributes.span` blob.
+    const attrsBag = obs.attributes as { span: Record<string, unknown> };
+    expect(attrsBag.span["mastra.metadata.body"]).toBe("{very-large-response-body}");
+  });
+
+  it("scope @mastra/kubit + only mastra.* attrs (no gen_ai.*) still produces records", () => {
+    // Belt-and-suspenders: even without gen_ai.* keys, the scope-prefix
+    // allow-list keeps these spans for the transformer (the filter test
+    // covers the predicate). Here we assert the transformer doesn't crash
+    // and produces a record that captures session/user/runId.
+    const [obs] = observations(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "generic",
+              "session.id": "sess-1",
+              "user.id": "u-1",
+              "mastra.metadata.runId": "r-1",
+              "mastra.generic.input": "ping",
+              "mastra.generic.output": "pong",
+            },
+          }),
+        ],
+        "wid",
+        "claim",
+      ),
+    );
+    expect(obs.session_id).toBe("sess-1");
+    expect(obs.user_id).toBe("u-1");
+    expect((obs.metadata as Record<string, unknown>).runId).toBe("r-1");
+    expect(obs.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "ping" }] },
+    ]);
+    expect(obs.output).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "pong" }] },
+    ]);
+  });
+});

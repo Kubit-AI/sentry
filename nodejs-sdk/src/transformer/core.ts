@@ -12,11 +12,21 @@ import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
 import { logger } from "../logger";
 import {
-  COMPLETION_START_ATTRS,
+  COMPLETION_START_ATTRS as LF_COMPLETION_START_ATTRS,
   PROMPT_ID_ATTRS,
   PROMPT_NAME_ATTRS,
   PROMPT_VERSION_ATTRS,
 } from "./frameworks/langfuse";
+import { COMPLETION_START_ATTRS as MASTRA_COMPLETION_START_ATTRS } from "./frameworks/mastra";
+
+// `completion_start_time` is the first-chunk timestamp emitters (Langfuse,
+// Mastra) record on streaming generations. Core uses it directly for the
+// `completion_start_time` field and as the third-tier source for TTFT
+// derivation. Langfuse priority is preserved by ordering it first.
+const COMPLETION_START_ATTRS = [
+  ...LF_COMPLETION_START_ATTRS,
+  ...MASTRA_COMPLETION_START_ATTRS,
+] as const;
 import type {
   CanonicalMessages,
   FrameworkAdapter,

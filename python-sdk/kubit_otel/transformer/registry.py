@@ -17,9 +17,13 @@ Ordering rationale:
 6. ``braintrust`` — ``braintrust.*`` JSON payloads + metrics.
 7. ``traceloop`` — OpenLLMetry ``traceloop.*`` + underscore cache variant
    + indexed ``gen_ai.prompt.<n>.*`` legacy unpacking.
-8. ``vercel_ai`` — raw ``ai.*`` namespace (apps without the ai-sdk-otel-adapter).
-9. ``openai_agents`` — reserved slot; agent keys live on ``otel_genai``.
-10. ``logfire`` — ``logfire.tags`` + ``pydantic_ai.all_messages``.
+8. ``mastra`` — Mastra ``mastra.*`` namespace; per-span-type input/output
+   keys + ``completion_start_time`` + ``modelMetadata`` blob. No
+   discriminator hook — ``gen_ai.operation.name`` (set on every Mastra span)
+   drives observation-type via ``otel_genai``.
+9. ``vercel_ai`` — raw ``ai.*`` namespace (apps without the ai-sdk-otel-adapter).
+10. ``openai_agents`` — reserved slot; agent keys live on ``otel_genai``.
+11. ``logfire`` — ``logfire.tags`` + ``pydantic_ai.all_messages``.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from .frameworks import (
     langfuse,
     langsmith,
     logfire,
+    mastra,
     openai_agents,
     openinference,
     otel_genai,
@@ -45,6 +50,7 @@ FRAMEWORKS = (
     langfuse,
     braintrust,
     traceloop,
+    mastra,
     vercel_ai,
     openai_agents,
     logfire,

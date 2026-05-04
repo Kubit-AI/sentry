@@ -10,6 +10,7 @@ This directory is the source of truth for how each Generative-AI observability f
 - [`logfire.md`](logfire.md) — Logfire + Vercel AI SDK integration, `ai.*` → `gen_ai.*` normalization.
 - [`openinference.md`](openinference.md) — OpenInference legacy conventions (`llm.*` / `embedding.*`), cost attributes.
 - [`openllmetry-traceloop.md`](openllmetry-traceloop.md) — OpenLLMetry/Traceloop hybrid standardization, indexed message flattening.
+- [`mastra.md`](mastra.md) — Mastra `mastra.*` namespace — per-span-type input/output keys, OTel GenAI overlap on `MODEL_GENERATION`, `model_chunk` filter rationale.
 - [`openai-agents.md`](openai-agents.md) — OpenAI-Agents instrumentation, `invoke_agent`, span-kind semantics for agentic workflows.
 
 ## The Architectural Evolution of LLM Observability and Telemetry Standardization

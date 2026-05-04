@@ -17,9 +17,14 @@
  *   6. braintrust    — `braintrust.*` JSON payloads + metrics.
  *   7. traceloop     — OpenLLMetry `traceloop.*` + underscore cache variant
  *                      + indexed `gen_ai.prompt.<n>.*` legacy unpacking.
- *   8. vercelAi      — raw `ai.*` namespace (apps without the ai-sdk-otel-adapter).
- *   9. openaiAgents  — reserved slot; agent keys live on `otelGenai`.
- *   10. logfire      — `logfire.tags` + `pydantic_ai.all_messages`.
+ *   8. mastra        — Mastra `mastra.*` namespace; per-span-type input/output
+ *                      keys + `completion_start_time` + `modelMetadata` blob.
+ *                      No discriminator hook — `gen_ai.operation.name` (set
+ *                      on every Mastra span) drives observation-type via
+ *                      `otelGenai`.
+ *   9. vercelAi      — raw `ai.*` namespace (apps without the ai-sdk-otel-adapter).
+ *   10. openaiAgents — reserved slot; agent keys live on `otelGenai`.
+ *   11. logfire      — `logfire.tags` + `pydantic_ai.all_messages`.
  */
 
 import { adapter as braintrust } from "./frameworks/braintrust";
@@ -27,6 +32,7 @@ import { adapter as generic } from "./frameworks/generic";
 import { adapter as langfuse } from "./frameworks/langfuse";
 import { adapter as langsmith } from "./frameworks/langsmith";
 import { adapter as logfire } from "./frameworks/logfire";
+import { adapter as mastra } from "./frameworks/mastra";
 import { adapter as openaiAgents } from "./frameworks/openaiAgents";
 import { adapter as openinference } from "./frameworks/openinference";
 import { adapter as otelGenai } from "./frameworks/otelGenai";
@@ -42,6 +48,7 @@ export const FRAMEWORKS: readonly FrameworkAdapter[] = [
   langfuse,
   braintrust,
   traceloop,
+  mastra,
   vercelAi,
   openaiAgents,
   logfire,

@@ -1092,3 +1092,309 @@ class TestCrossVendorCachePriority:
         )
         [obs] = _observations(transform_spans([span], "wid", "claim"))
         assert obs["usage_details"]["cache_read_input"] == 100
+
+
+class TestMastraSchema:
+    """Mastra ``mastra.*`` per-span-type input/output projection.
+
+    Fixtures match the Mastra attribute shapes observed in real exports from
+    a Mastra-emitting app (``~/Downloads/regulus/*.json``): per-span-type
+    ``mastra.<type>.input/output`` keys + run-context metadata + a
+    ``mastra.completion_start_time`` ISO timestamp on streaming GENERATIONs.
+    Spans were captured under instrumentation scope ``@mastra/kubit`` — an
+    in-tree Kubit emitter, not a published package.
+    """
+
+    def test_agent_run_projects_user_prompt_and_assistant_text(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "agent_run",
+                "gen_ai.operation.name": "invoke_agent",
+                "gen_ai.system_instructions": "Be helpful.",
+                "mastra.agent_run.input": "show me daily tokens",
+                "mastra.agent_run.output": json.dumps(
+                    {
+                        "text": '{"responseAction":"CREATE_QUERY"}',
+                        "object": {"responseAction": "CREATE_QUERY"},
+                        "files": [],
+                    }
+                ),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "INVOKE_AGENT"
+        roles = [m["role"] for m in obs["input"]]
+        assert "system" in roles  # gen_ai.system_instructions injection
+        user_msg = next(m for m in obs["input"] if m["role"] == "user")
+        assert user_msg["parts"][0]["content"] == "show me daily tokens"
+        assert obs["output"] == [
+            {
+                "role": "assistant",
+                "parts": [
+                    {"type": "text", "content": '{"responseAction":"CREATE_QUERY"}'}
+                ],
+            }
+        ]
+
+    def test_model_generation_routes_through_otel_genai(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "model_generation",
+                "gen_ai.operation.name": "chat",
+                "gen_ai.request.model": "gemini-3-flash-preview",
+                "gen_ai.provider.name": "google",
+                "gen_ai.input.messages": json.dumps(
+                    [{"role": "user", "content": "hi"}]
+                ),
+                "gen_ai.output.messages": json.dumps(
+                    [{"role": "assistant", "content": "hello"}]
+                ),
+                "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.output_tokens": 2,
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "GENERATION"
+        assert obs["model"] == "gemini-3-flash-preview"
+        assert obs["provider"] == "google"
+        assert obs["usage_details"] == {"input": 10, "output": 2, "total": 12}
+
+    def test_model_step_projects_messages_and_recovers_model_from_metadata(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "model_step",
+                "gen_ai.operation.name": "model_step",
+                "mastra.model_step.input": json.dumps(
+                    [{"role": "user", "parts": [{"text": "what's 2+2?"}]}]
+                ),
+                "mastra.model_step.output": json.dumps(
+                    {
+                        "text": "It is 4.",
+                        "toolCalls": [
+                            {
+                                "toolName": "calculator",
+                                "toolCallId": "call_1",
+                                "args": {"expr": "2+2"},
+                            }
+                        ],
+                    }
+                ),
+                "mastra.metadata.modelMetadata": json.dumps(
+                    {
+                        "modelId": "gemini-3-flash-preview",
+                        "modelVersion": "v2",
+                        "modelProvider": "google",
+                    }
+                ),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["provided_model_name"] == "gemini-3-flash-preview"
+        assert obs["provider"] == "google"
+        assert obs["input"][0]["role"] == "user"
+        assert obs["output"][0]["role"] == "assistant"
+        assert obs["output"][0]["parts"] == [
+            {"type": "text", "content": "It is 4."},
+            {
+                "type": "tool_call",
+                "name": "calculator",
+                "id": "call_1",
+                "arguments": {"expr": "2+2"},
+            },
+        ]
+
+    def test_processor_run_unpacks_message_list_with_system_messages(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "processor_run",
+                "gen_ai.operation.name": "processor_run",
+                "mastra.processor_run.output": json.dumps(
+                    {
+                        "phase": "outputStep",
+                        "messageList": {
+                            "systemMessages": [
+                                {"role": "system", "content": "Be precise."}
+                            ],
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": "How many?"}
+                                    ],
+                                },
+                                {
+                                    "role": "assistant",
+                                    "content": [
+                                        {"type": "text", "text": "Three."}
+                                    ],
+                                },
+                            ],
+                        },
+                    }
+                ),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "PROCESSOR_RUN"
+        assert obs["output"] == [
+            {
+                "role": "system",
+                "parts": [{"type": "text", "content": "Be precise."}],
+            },
+            {
+                "role": "user",
+                "parts": [{"type": "text", "content": "How many?"}],
+            },
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "Three."}],
+            },
+        ]
+
+    def test_tool_call_projects_tool_call_and_response_parts(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "tool_call",
+                "gen_ai.operation.name": "execute_tool",
+                "mastra.tool_call.toolId": "getWeather",
+                "mastra.tool_call.toolCallId": "call_xyz",
+                "mastra.tool_call.input": json.dumps({"city": "Paris"}),
+                "mastra.tool_call.output": json.dumps({"temp": 22}),
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "TOOL"
+        assert obs["tool_name"] == "getWeather"
+        assert obs["input"] == [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "name": "getWeather",
+                        "id": "call_xyz",
+                        "arguments": {"city": "Paris"},
+                    }
+                ],
+            }
+        ]
+        assert obs["output"] == [
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "call_xyz",
+                        "response": {"temp": 22},
+                    }
+                ],
+            }
+        ]
+
+    def test_workflow_run_text_wraps_stringified_blobs(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "workflow_run",
+                "gen_ai.operation.name": "workflow_run",
+                "mastra.workflow_run.input": json.dumps({"query": "hello"}),
+                "mastra.workflow_run.output": "done",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["type"] == "WORKFLOW_RUN"
+        assert obs["input"][0]["role"] == "user"
+        assert obs["input"][0]["parts"][0]["content"] == '{"query": "hello"}'
+        assert obs["output"] == [
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": "done"}],
+            }
+        ]
+
+    def test_derives_ttft_from_mastra_completion_start_time(self):
+        # span starts at 1_700_000_000 s; completion_start_time is +250 ms.
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            start_time_ns=1_700_000_000_000_000_000,
+            end_time_ns=1_700_000_002_000_000_000,
+            attributes={
+                "mastra.span.type": "model_generation",
+                "gen_ai.operation.name": "chat",
+                "gen_ai.request.model": "gemini-3-flash-preview",
+                "gen_ai.input.messages": json.dumps(
+                    [{"role": "user", "content": "hi"}]
+                ),
+                "mastra.completion_start_time": "2023-11-14T22:13:20.250Z",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["completion_start_time"] == "2023-11-14T22:13:20.250Z"
+        assert obs["time_to_first_token"] == 250
+
+    def test_enrich_metadata_hoists_run_context_and_modelmetadata_only(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "model_step",
+                "gen_ai.operation.name": "model_step",
+                "mastra.metadata.runId": "run-123",
+                "mastra.metadata.orgId": "org-456",
+                "mastra.metadata.workspaceId": "ws-789",
+                "mastra.metadata.modelMetadata": json.dumps(
+                    {
+                        "modelId": "gemini",
+                        "modelVersion": "v2",
+                        "modelProvider": "google",
+                    }
+                ),
+                "mastra.metadata.body": "{very-large-response-body}",
+                "mastra.metadata.headers": "{some-headers}",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        md = obs["metadata"]
+        assert md["runId"] == "run-123"
+        assert md["orgId"] == "org-456"
+        assert md["workspaceId"] == "ws-789"
+        assert md["mastra_modelMetadata"] == {
+            "modelId": "gemini",
+            "modelVersion": "v2",
+            "modelProvider": "google",
+        }
+        assert "mastra.metadata.body" not in md
+        assert "body" not in md
+        assert "headers" not in md
+        # Body / headers stay visible in raw attributes.
+        assert (
+            obs["attributes"]["span"]["mastra.metadata.body"]
+            == "{very-large-response-body}"
+        )
+
+    def test_scope_only_no_genai_attrs_still_produces_records(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "generic",
+                "session.id": "sess-1",
+                "user.id": "u-1",
+                "mastra.metadata.runId": "r-1",
+                "mastra.generic.input": "ping",
+                "mastra.generic.output": "pong",
+            },
+        )
+        [obs] = _observations(transform_spans([span], "wid", "claim"))
+        assert obs["session_id"] == "sess-1"
+        assert obs["user_id"] == "u-1"
+        assert obs["metadata"]["runId"] == "r-1"
+        assert obs["input"] == [
+            {"role": "user", "parts": [{"type": "text", "content": "ping"}]}
+        ]
+        assert obs["output"] == [
+            {"role": "assistant", "parts": [{"type": "text", "content": "pong"}]}
+        ]

@@ -1711,3 +1711,242 @@ describe("non-LLM spans", () => {
     expect(r.output).toBeNull();
   });
 });
+
+describe("mastra normalizer", () => {
+  it("agent_run: user prompt + parsed assistant text", () => {
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "agent_run",
+              "mastra.agent_run.input": "what is 2+2?",
+              "mastra.agent_run.output": JSON.stringify({
+                text: "It is 4.",
+                object: { answer: 4 },
+              }),
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    expect(r.input).toEqual([
+      { role: "user", parts: [{ type: "text", content: "what is 2+2?" }] },
+    ]);
+    expect(r.output).toEqual([
+      { role: "assistant", parts: [{ type: "text", content: "It is 4." }] },
+    ]);
+  });
+
+  it("agent_run: falls back to stringified `object` when `text` is empty", () => {
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "agent_run",
+              "mastra.agent_run.input": "do the thing",
+              "mastra.agent_run.output": JSON.stringify({
+                text: "",
+                object: { result: "done" },
+              }),
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    expect(asMessages(r.output)[0].parts[0]).toEqual({
+      type: "text",
+      content: '{"result":"done"}',
+    });
+  });
+
+  it("processor_run: messageList with systemMessages prepended", () => {
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "processor_run",
+              "mastra.processor_run.output": JSON.stringify({
+                phase: "outputStep",
+                messageList: {
+                  systemMessages: [{ role: "system", content: "Be terse." }],
+                  messages: [
+                    {
+                      role: "user",
+                      content: [{ type: "text", text: "hi" }],
+                    },
+                  ],
+                },
+              }),
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    expect(r.output).toEqual([
+      { role: "system", parts: [{ type: "text", content: "Be terse." }] },
+      { role: "user", parts: [{ type: "text", content: "hi" }] },
+    ]);
+  });
+
+  it("model_step: parses input message-array + output {text, toolCalls}", () => {
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "model_step",
+              "mastra.model_step.input": JSON.stringify([
+                { role: "user", parts: [{ text: "calc 2+2" }] },
+              ]),
+              "mastra.model_step.output": JSON.stringify({
+                text: "4",
+                toolCalls: [{ toolName: "calc", args: { expr: "2+2" } }],
+              }),
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    const inMsgs = asMessages(r.input);
+    expect(inMsgs[0].role).toBe("user");
+    expect(inMsgs[0].parts[0]).toEqual({ type: "text", content: "calc 2+2" });
+    expect(asMessages(r.output)[0].parts).toEqual([
+      { type: "text", content: "4" },
+      {
+        type: "tool_call",
+        name: "calc",
+        arguments: { expr: "2+2" },
+      },
+    ]);
+  });
+
+  it("tool_call: builds tool_call request + tool_call_response parts with shared id", () => {
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "tool_call",
+              "mastra.tool_call.toolId": "lookup",
+              "mastra.tool_call.toolCallId": "id_42",
+              "mastra.tool_call.input": JSON.stringify({ q: "abc" }),
+              "mastra.tool_call.output": JSON.stringify({ found: true }),
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    expect(r.input).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "tool_call",
+            name: "lookup",
+            id: "id_42",
+            arguments: { q: "abc" },
+          },
+        ],
+      },
+    ]);
+    expect(r.output).toEqual([
+      {
+        role: "tool",
+        parts: [
+          { type: "tool_call_response", id: "id_42", response: { found: true } },
+        ],
+      },
+    ]);
+  });
+
+  it("tool_call without toolId emits null/null", () => {
+    // Defensive: a tool_call span missing the toolId attr can't be
+    // canonicalised. The hook returns null on both sides rather than
+    // synthesising an unnamed tool call.
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "tool_call",
+              "mastra.tool_call.input": JSON.stringify({ q: "abc" }),
+              "mastra.tool_call.output": JSON.stringify({ found: true }),
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    expect(r.input).toBeNull();
+    expect(r.output).toBeNull();
+  });
+
+  it("workflow_run: text-wraps stringified blob when not a message array", () => {
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "workflow_run",
+              "mastra.workflow_run.input": JSON.stringify({ x: 1 }),
+              "mastra.workflow_run.output": "ok",
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    expect(asMessages(r.input)[0]).toEqual({
+      role: "user",
+      parts: [{ type: "text", content: '{"x":1}' }],
+    });
+    expect(asMessages(r.output)[0]).toEqual({
+      role: "assistant",
+      parts: [{ type: "text", content: "ok" }],
+    });
+  });
+
+  it("model_chunk routes to null (filtered upstream; no canonical projection)", () => {
+    // Belt-and-suspenders: even if a model_chunk span made it past the span
+    // filter, the normalizer returns null rather than emitting noise.
+    const r = obs(
+      transformSpans(
+        [
+          makeSpan({
+            scopeName: "@mastra/kubit",
+            attrs: {
+              "mastra.span.type": "model_chunk",
+              "mastra.model_chunk.output": "{}",
+            },
+          }),
+        ],
+        "w",
+        "c",
+      ),
+    );
+    expect(r.input).toBeNull();
+    expect(r.output).toBeNull();
+  });
+});

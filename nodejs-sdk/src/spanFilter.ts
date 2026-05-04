@@ -70,6 +70,10 @@ export const KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES = [
   // Traceloop / OpenLLMetry SDK workflow + task decorator spans.
   "traceloop.tracer", // Python SDK tracer name
   "@traceloop", // JS SDK package prefix (matches @traceloop/node-server-sdk)
+  // Mastra AI framework — covers `@mastra/core`, `@mastra/otel-exporter`,
+  // and any other tracer that ships under the `@mastra/*` scope (including
+  // in-tree Kubit emitters apps wire under e.g. `@mastra/kubit`).
+  "@mastra",
 ] as const;
 
 /**
@@ -126,7 +130,18 @@ export function isLangGraphInternalSpan(span: ReadableSpan): boolean {
   );
 }
 
+/**
+ * Mastra emits a `mastra.span.type=model_chunk` span per streamed token-chunk;
+ * the payload is always `mastra.model_chunk.output: "{}"` — pure stream
+ * coordination, no LLM data. Mastra's own Sentry exporter skips them too.
+ * The default Kubit filter drops them on ingest.
+ */
+export function isMastraInternalSpan(span: ReadableSpan): boolean {
+  return span.attributes?.["mastra.span.type"] === "model_chunk";
+}
+
 export function isDefaultExportSpan(span: ReadableSpan): boolean {
   if (isLangGraphInternalSpan(span)) return false;
+  if (isMastraInternalSpan(span)) return false;
   return isKubitSpan(span) || isGenAISpan(span) || isKnownLLMInstrumentor(span);
 }
