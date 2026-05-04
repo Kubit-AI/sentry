@@ -16,6 +16,10 @@ from typing import Any, Optional, Sequence
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 
+from ..span_filter import (
+    is_langgraph_internal_span,
+    is_mastra_internal_span,
+)
 from .frameworks import (
     langfuse as _langfuse,
     mastra as _mastra,
@@ -181,7 +185,16 @@ def transform_spans(
     """Transform a batch of ReadableSpan objects into Kubit JSON records.
 
     Returns a list of dicts ready for serialisation and export. Every span
-    is transformed — no filtering by scope or attributes happens here.
+    is transformed except for two narrow classes of zero-payload framework
+    noise (Mastra ``mastra.span.type=model_chunk`` stream-coordination
+    spans and LangGraph Pregel ``ChannelWrite<...>`` / ``__start__`` /
+    ``__end__`` spans), which are dropped here so all entry points —
+    ``KubitSpanProcessor`` with the default predicate, bare
+    ``KubitExporter`` consumers, and apps calling ``transform_spans``
+    directly — inherit the same behaviour. Broader scope/attribute
+    filtering still lives at the processor layer
+    (:func:`kubit_otel.span_filter.is_default_export_span`) so dropped
+    spans never enter the queue.
     """
     records: list[dict[str, Any]] = []
     now = now_iso()
@@ -200,6 +213,15 @@ def transform_spans(
         return rec
 
     for span in spans:
+        # Always-noise spans: zero LLM payload, universally droppable.
+        # Skipped here (rather than only at the processor layer) so
+        # consumers wrapping ``KubitExporter`` directly — or calling
+        # ``transform_spans`` themselves from a custom span processor —
+        # also inherit the drop. See ``span_filter.py`` for the
+        # membership criteria of each class.
+        if is_mastra_internal_span(span) or is_langgraph_internal_span(span):
+            continue
+
         resource_attrs = dict(span.resource.attributes) if span.resource else {}
         span_attrs = dict(span.attributes) if span.attributes else {}
         scope_name = (

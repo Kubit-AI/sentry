@@ -1928,25 +1928,24 @@ describe("mastra normalizer", () => {
     });
   });
 
-  it("model_chunk routes to null (filtered upstream; no canonical projection)", () => {
-    // Belt-and-suspenders: even if a model_chunk span made it past the span
-    // filter, the normalizer returns null rather than emitting noise.
-    const r = obs(
-      transformSpans(
-        [
-          makeSpan({
-            scopeName: "@mastra/kubit",
-            attrs: {
-              "mastra.span.type": "model_chunk",
-              "mastra.model_chunk.output": "{}",
-            },
-          }),
-        ],
-        "w",
-        "c",
-      ),
+  it("model_chunk produces zero records (dropped inside transformSpans)", () => {
+    // Universal-noise carve-out: `mastra.span.type=model_chunk` spans are
+    // skipped at the top of `transformSpans`, so consumers wrapping
+    // `KubitExporter` directly (or calling `transformSpans` themselves)
+    // also inherit the drop — not just `KubitSpanProcessor` users.
+    const records = transformSpans(
+      [
+        makeSpan({
+          scopeName: "@mastra/kubit",
+          attrs: {
+            "mastra.span.type": "model_chunk",
+            "mastra.model_chunk.output": "{}",
+          },
+        }),
+      ],
+      "w",
+      "c",
     );
-    expect(r.input).toBeNull();
-    expect(r.output).toBeNull();
+    expect(records).toEqual([]);
   });
 });

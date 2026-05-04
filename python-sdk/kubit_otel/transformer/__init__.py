@@ -7,8 +7,13 @@ Two entity types are produced:
   - ``trace``                 one per unique trace_id (from root spans)
   - ``enriched_observation``  one per span (including root spans)
 
-Every span received is transformed — scope/attribute filtering lives upstream
-in :class:`kubit_otel.processor.KubitSpanProcessor` (see
+Almost every span received is transformed. The two zero-payload framework
+noise classes — Mastra ``mastra.span.type=model_chunk`` stream-coordination
+spans and LangGraph Pregel ``ChannelWrite<...>`` / ``__start__`` /
+``__end__`` spans — are dropped at the top of ``transform_spans`` so
+consumers wrapping :class:`kubit_otel.exporter.KubitExporter` directly
+inherit the drop. Broader scope/attribute filtering lives upstream in
+:class:`kubit_otel.processor.KubitSpanProcessor` (see
 :mod:`kubit_otel.span_filter`).
 
 Framework-specific attribute mappings live under

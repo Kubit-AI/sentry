@@ -1795,3 +1795,77 @@ describe("Mastra schema", () => {
     ]);
   });
 });
+
+describe("transformSpans always-drop noise classes", () => {
+  // The processor-level `isDefaultExportSpan` filter only fires when consumers
+  // route spans through `KubitSpanProcessor`. Apps wrapping `KubitExporter`
+  // directly — or calling `transformSpans` themselves from a custom OTel
+  // span processor — bypass that. The transformer carve-out below ensures
+  // both classes of zero-payload framework noise (Mastra `model_chunk`,
+  // LangGraph Pregel coordination spans) drop universally regardless of
+  // entry point.
+
+  it("drops mastra.span.type=model_chunk before producing any records", () => {
+    const records = transformSpans(
+      [
+        makeSpan({
+          scopeName: "@mastra/kubit",
+          attrs: {
+            "mastra.span.type": "model_chunk",
+            "mastra.model_chunk.output": "{}",
+          },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    expect(records).toEqual([]);
+  });
+
+  it("drops LangGraph ChannelWrite / __start__ / __end__ spans", () => {
+    const records = transformSpans(
+      [
+        makeSpan({ name: "ChannelWrite<foo,bar>" }),
+        makeSpan({ name: "__start__" }),
+        makeSpan({ name: "__end__" }),
+      ],
+      "wid",
+      "claim",
+    );
+    expect(records).toEqual([]);
+  });
+
+  it("noise spans in a mixed batch don't poison neighbouring real spans", () => {
+    const records = transformSpans(
+      [
+        makeSpan({ name: "ChannelWrite<x>" }),
+        makeSpan({
+          scopeName: "@mastra/kubit",
+          attrs: {
+            "mastra.span.type": "model_chunk",
+            "mastra.model_chunk.output": "{}",
+          },
+        }),
+        makeSpan({
+          attrs: {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": "gpt-4o-mini",
+            "gen_ai.input.messages": JSON.stringify([
+              { role: "user", content: "hi" },
+            ]),
+          },
+        }),
+      ],
+      "wid",
+      "claim",
+    );
+    // One trace + one observation for the surviving GENERATION span.
+    expect(records.map((r) => r.entity_type)).toEqual([
+      "trace",
+      "enriched_observation",
+    ]);
+    const obs = records.find((r) => r.entity_type === "enriched_observation")!;
+    expect(obs.type).toBe("GENERATION");
+    expect(obs.model).toBe("gpt-4o-mini");
+  });
+});

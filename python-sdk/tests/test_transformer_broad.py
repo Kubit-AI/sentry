@@ -1398,3 +1398,72 @@ class TestMastraSchema:
         assert obs["output"] == [
             {"role": "assistant", "parts": [{"type": "text", "content": "pong"}]}
         ]
+
+
+class TestTransformSpansAlwaysDropNoiseClasses:
+    """The processor-level ``is_default_export_span`` filter only fires when
+    consumers route spans through ``KubitSpanProcessor``. Apps wrapping
+    ``KubitExporter`` directly — or calling ``transform_spans`` themselves
+    from a custom OTel span processor — bypass that. The transformer
+    carve-out below ensures both classes of zero-payload framework noise
+    (Mastra ``model_chunk``, LangGraph Pregel coordination spans) drop
+    universally regardless of entry point.
+    """
+
+    def test_drops_mastra_model_chunk_before_producing_records(self):
+        span = _mock_span(
+            scope_name="@mastra/kubit",
+            attributes={
+                "mastra.span.type": "model_chunk",
+                "mastra.model_chunk.output": "{}",
+            },
+        )
+        assert transform_spans([span], "wid", "claim") == []
+
+    def test_drops_langgraph_channelwrite_start_end(self):
+        records = transform_spans(
+            [
+                _mock_span(name="ChannelWrite<foo,bar>"),
+                _mock_span(name="__start__"),
+                _mock_span(name="__end__"),
+            ],
+            "wid",
+            "claim",
+        )
+        assert records == []
+
+    def test_noise_spans_in_mixed_batch_dont_poison_neighbours(self):
+        records = transform_spans(
+            [
+                _mock_span(name="ChannelWrite<x>", trace_id=0xA1, span_id=0xB1),
+                _mock_span(
+                    trace_id=0xA2,
+                    span_id=0xB2,
+                    scope_name="@mastra/kubit",
+                    attributes={
+                        "mastra.span.type": "model_chunk",
+                        "mastra.model_chunk.output": "{}",
+                    },
+                ),
+                _mock_span(
+                    trace_id=0xA3,
+                    span_id=0xB3,
+                    attributes={
+                        "gen_ai.operation.name": "chat",
+                        "gen_ai.request.model": "gpt-4o-mini",
+                        "gen_ai.input.messages": json.dumps(
+                            [{"role": "user", "content": "hi"}]
+                        ),
+                    },
+                ),
+            ],
+            "wid",
+            "claim",
+        )
+        assert [r["entity_type"] for r in records] == [
+            "trace",
+            "enriched_observation",
+        ]
+        obs = next(r for r in records if r["entity_type"] == "enriched_observation")
+        assert obs["type"] == "GENERATION"
+        assert obs["model"] == "gpt-4o-mini"

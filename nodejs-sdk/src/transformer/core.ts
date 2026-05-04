@@ -12,6 +12,10 @@ import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
 import { logger } from "../logger";
 import {
+  isLangGraphInternalSpan,
+  isMastraInternalSpan,
+} from "../spanFilter";
+import {
   COMPLETION_START_ATTRS as LF_COMPLETION_START_ATTRS,
   PROMPT_ID_ATTRS,
   PROMPT_NAME_ATTRS,
@@ -204,7 +208,15 @@ export interface KubitRecord {
  * Transform a batch of ReadableSpan objects into Kubit JSON records.
  *
  * Returns a list of objects ready for serialisation and export. Every span
- * is transformed — no filtering by scope or attributes happens here.
+ * is transformed except for two narrow classes of zero-payload framework
+ * noise (Mastra `mastra.span.type=model_chunk` stream-coordination spans
+ * and LangGraph Pregel `ChannelWrite<...>` / `__start__` / `__end__`
+ * spans), which are dropped here so all entry points — `KubitSpanProcessor`
+ * with the default predicate, bare `KubitExporter` consumers, and apps
+ * calling `transformSpans` directly — inherit the same behaviour. Broader
+ * scope/attribute filtering still lives at the processor layer
+ * (`is_default_export_span` / `isDefaultExportSpan`) so dropped spans
+ * never enter the queue.
  */
 export function transformSpans(
   spans: ReadableSpan[],
@@ -228,6 +240,13 @@ export function transformSpans(
   };
 
   for (const span of spans) {
+    // Always-noise spans: zero LLM payload, universally droppable. Skipped
+    // here (rather than only at the processor layer) so consumers wrapping
+    // `KubitExporter` directly — or calling `transformSpans` themselves
+    // from a custom span processor — also inherit the drop. See
+    // `spanFilter.ts` for the membership criteria of each class.
+    if (isMastraInternalSpan(span) || isLangGraphInternalSpan(span)) continue;
+
     const resourceAttrs: Record<string, unknown> =
       span.resource?.attributes ?? {};
     const spanAttrs: Record<string, unknown> = span.attributes ?? {};

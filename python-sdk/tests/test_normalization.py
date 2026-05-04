@@ -1791,9 +1791,12 @@ class TestMastraNormalizer:
             "parts": [{"type": "text", "content": "ok"}],
         }
 
-    def test_model_chunk_routes_to_null(self):
-        # Belt-and-suspenders: even if a model_chunk span made it past the
-        # span filter, the normalizer returns None rather than emitting noise.
+    def test_model_chunk_produces_zero_records(self):
+        # Universal-noise carve-out: ``mastra.span.type=model_chunk`` spans
+        # are skipped at the top of ``transform_spans``, so consumers
+        # wrapping ``KubitExporter`` directly (or calling ``transform_spans``
+        # themselves) also inherit the drop — not just
+        # ``KubitSpanProcessor`` users.
         span = _mock_span(
             scope_name="@mastra/kubit",
             attrs={
@@ -1801,6 +1804,5 @@ class TestMastraNormalizer:
                 "mastra.model_chunk.output": "{}",
             },
         )
-        r = _obs(_transform(span))
-        assert r["input"] is None
-        assert r["output"] is None
+        records = _transform(span)
+        assert records == []
