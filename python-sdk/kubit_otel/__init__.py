@@ -55,4 +55,10 @@ __all__ = [
     "is_known_llm_instrumentor",
     "is_kubit_span",
 ]
-__version__ = "0.4.0"
+
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("kubit-otel")
+except Exception:
+    __version__ = "0.0.0+unknown"

@@ -31,7 +31,7 @@ def _reset_global_tracer_provider():
 
 
 def _silence_exporter():
-    """Patch the exporter so configure() runs without real credentials."""
+    """Patch the exporter so configure() runs without instantiating an OTLP client."""
     return patch("kubit_otel.processor.KubitExporter", return_value=MagicMock())
 
 

@@ -5,9 +5,9 @@
  * variable (``debug`` | ``info`` | ``warn`` | ``error``), evaluated at
  * import time. Default level is ``info``.
  *
- * This logger is for SDK internals only — credentials refresh, export
- * lifecycle, batch splits, retries, transformer summaries. It never logs
- * span content or anything from user application code.
+ * This logger is for SDK internals only — exporter lifecycle and span
+ * filtering. It never logs span content or anything from user application
+ * code.
  */
 
 type Level = "debug" | "info" | "warn" | "error";

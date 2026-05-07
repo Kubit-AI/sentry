@@ -1,6 +1,6 @@
 {
   "name": "@kubit-ai/otel",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "OpenTelemetry exporter for Kubit analytics.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,7 +13,6 @@
     "opentelemetry",
     "otel",
     "kubit",
-    "kinesis",
     "observability",
     "llm-ops",
     "analytics",
@@ -30,22 +29,21 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {
-    "@aws-sdk/client-kinesis": "^3.500.0"
-  },
   "peerDependencies": {
     "@opentelemetry/api": ">=1.7.0",
+    "@opentelemetry/exporter-trace-otlp-proto": ">=0.200.0",
     "@opentelemetry/resources": ">=2.0.0",
     "@opentelemetry/sdk-trace-base": ">=2.0.0",
     "@opentelemetry/sdk-trace-node": ">=2.0.0"
   },
   "devDependencies": {
     "@opentelemetry/api": "^1.7.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.200.0",
     "@opentelemetry/resources": "^2.0.0",
     "@opentelemetry/sdk-trace-base": "^2.0.0",
     "@opentelemetry/sdk-trace-node": "^2.0.0",

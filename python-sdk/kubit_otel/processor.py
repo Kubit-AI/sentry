@@ -16,7 +16,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from kubit_otel.exporter import KubitExporter
-from kubit_otel.credentials import DEFAULT_TOKEN_ENDPOINT
 from kubit_otel.span_filter import (
     ShouldExportSpan,
     is_default_export_span,
@@ -38,8 +37,9 @@ class KubitSpanProcessor(BatchSpanProcessor):
     ----------
     api_key : str
         Kubit API key.
-    token_endpoint : str
-        URL of the credential endpoint.
+    endpoint : str, optional
+        Trace endpoint URL. See :class:`kubit_otel.exporter.KubitExporter`
+        for resolution precedence.
     should_export_span : callable, optional
         Predicate ``(span: ReadableSpan) -> bool``. Spans for which it returns
         ``False`` are dropped before they reach the batch queue. Defaults to
@@ -58,7 +58,7 @@ class KubitSpanProcessor(BatchSpanProcessor):
     def __init__(
         self,
         api_key: str,
-        token_endpoint: str = DEFAULT_TOKEN_ENDPOINT,
+        endpoint: Optional[str] = None,
         should_export_span: Optional[ShouldExportSpan] = None,
         max_queue_size: int = 2048,
         schedule_delay_millis: float = 5000,
@@ -67,7 +67,7 @@ class KubitSpanProcessor(BatchSpanProcessor):
     ) -> None:
         exporter = KubitExporter(
             api_key=api_key,
-            token_endpoint=token_endpoint,
+            endpoint=endpoint,
         )
         super().__init__(
             span_exporter=exporter,

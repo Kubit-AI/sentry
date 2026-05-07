@@ -1,6 +1,6 @@
 # kubit-otel
 
-OpenTelemetry exporter for Kubit analytics.
+OpenTelemetry exporter for Kubit analytics. A thin convenience wrapper around the stock OTLP/HTTP exporter, preconfigured to ship spans to the Kubit collector.
 
 ## Install
 
@@ -25,23 +25,27 @@ with tracer.start_as_current_span("chat.completion") as span:
     span.set_attribute("gen_ai.usage.output_tokens", 5)
 ```
 
-Spans are exported to Kubit using standard OpenTelemetry GenAI semantic
-conventions. Each trace's root span is recorded as the trace; every span
-(including the root) is recorded as an observation under it. `gen_ai.*`
-attributes are mapped to first-class, queryable fields for model name,
-prompt/completion, token counts, and cost.
+Spans are sent as standard OTLP/HTTP protobuf to the Kubit collector, which normalizes them across LLM frameworks (OTel GenAI semconv, OpenInference, Langfuse, Vercel AI, Braintrust, Logfire, OpenLLMetry/Traceloop, Mastra, OpenAI Agents, Pydantic AI) into the canonical Kubit schema and routes them to your workspace.
+
+## Configuration
+
+| Option (kwarg) | Env var | Default |
+| --- | --- | --- |
+| `api_key` | — | _required_ |
+| `endpoint` | `KUBIT_OTEL_ENDPOINT` | `https://kubit-ingest.kubit.ai/v1/traces` |
+| `service_name` | — | `default` |
+| `service_version` | — | _unset_ |
+| `resource_attributes` | — | `{}` |
+
+`KUBIT_OTEL_LOG_LEVEL` (`debug` | `info` | `warn` | `error`) controls the SDK's internal logger.
+
+The standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` env vars are honored too, sitting between `KUBIT_OTEL_ENDPOINT` and the built-in default in the resolution chain.
 
 ### Works alongside other OTel-based SDKs
 
-`configure()` detects whether a real `TracerProvider` is already installed
-as the global OTel provider. If so, it attaches `KubitSpanProcessor` to
-that provider and merges in your resource attributes — it does **not**
-replace the existing provider. You can call `configure()` before or after
-other OTel-based libraries (Langfuse, OpenLLMetry, an OTel distro, …) and
-every span will reach both sinks.
+`configure()` detects whether a real `TracerProvider` is already installed as the global OTel provider. If so, it attaches `KubitSpanProcessor` to that provider and merges in your resource attributes — it does **not** replace the existing provider. You can call `configure()` before or after other OTel-based libraries (Langfuse, OpenLLMetry, an OTel distro, …) and every span will reach both sinks.
 
-If you want explicit "attach only, never register" behavior, use
-`attach()`:
+If you want explicit "attach only, never register" behavior, use `attach()`:
 
 ```python
 from kubit_otel import attach
@@ -50,26 +54,13 @@ from kubit_otel import attach
 attach(api_key="rg.v1.xxx")
 ```
 
-## Supported attributes
-
-| OpenTelemetry attribute | Purpose |
-|---|---|
-| `gen_ai.request.model` / `gen_ai.response.model` | Model name |
-| `gen_ai.prompt` / `gen_ai.content.prompt` | Input prompt |
-| `gen_ai.completion` / `gen_ai.content.completion` | Output completion |
-| `gen_ai.usage.input_tokens` | Input token count |
-| `gen_ai.usage.output_tokens` | Output token count |
-| `gen_ai.usage.cost` | Total cost (USD) |
-| `session.id` | Conversation session id |
-| `enduser.id` | End-user id |
-
 ## Span filtering
 
 By default, only LLM-relevant spans are forwarded to Kubit. A span is exported if it:
 
 - was created by the Kubit SDK tracer (`kubit-sdk`),
 - carries any `gen_ai.*` semantic-convention attribute, or
-- comes from a known LLM instrumentation scope (OpenInference, Langfuse, Vercel AI SDK, …).
+- comes from a known LLM instrumentation scope (OpenInference, Langfuse, Vercel AI SDK, Braintrust, Logfire, OpenLLMetry/Traceloop, Mastra, OpenAI Agents, …).
 
 This keeps HTTP/DB/framework auto-instrumentation noise out of your Kubit workspace without extra configuration.
 

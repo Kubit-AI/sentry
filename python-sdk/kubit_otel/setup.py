@@ -12,7 +12,6 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
-from kubit_otel.credentials import DEFAULT_TOKEN_ENDPOINT
 from kubit_otel.processor import KubitSpanProcessor
 from kubit_otel.span_filter import ShouldExportSpan
 
@@ -61,9 +60,11 @@ def _merge_resource_into_provider(
     provider._resource = existing.merge(our_resource)  # type: ignore[attr-defined]
 
 
-def _log_token_host(token_endpoint: str) -> str:
+def _log_endpoint_host(endpoint: Optional[str]) -> str:
+    if not endpoint:
+        return "<from OTEL_EXPORTER_OTLP_*>"
     try:
-        parsed = urlparse(token_endpoint)
+        parsed = urlparse(endpoint)
         if parsed.scheme and parsed.netloc:
             return f"{parsed.scheme}://{parsed.netloc}"
     except Exception:
@@ -76,7 +77,7 @@ def configure(
     *,
     service_name: str = "default",
     service_version: Optional[str] = None,
-    token_endpoint: str = DEFAULT_TOKEN_ENDPOINT,
+    endpoint: Optional[str] = None,
     resource_attributes: Optional[dict] = None,
     should_export_span: Optional[ShouldExportSpan] = None,
 ) -> TracerProvider:
@@ -104,8 +105,9 @@ def configure(
         Name of the service (maps to ``service.name`` resource attribute).
     service_version : str, optional
         Version of the service.
-    token_endpoint : str
-        URL of the credential endpoint.
+    endpoint : str, optional
+        Trace endpoint URL. See :class:`kubit_otel.exporter.KubitExporter` for
+        resolution precedence.
     resource_attributes : dict, optional
         Additional OTel resource attributes to include.
     should_export_span : callable, optional
@@ -121,7 +123,7 @@ def configure(
     our_resource = _build_resource(service_name, service_version, resource_attributes)
     processor = KubitSpanProcessor(
         api_key=api_key,
-        token_endpoint=token_endpoint,
+        endpoint=endpoint,
         should_export_span=should_export_span,
     )
 
@@ -138,11 +140,11 @@ def configure(
         branch = "registered"
 
     logger.info(
-        "kubit_otel configured  mode=%s service_name=%s service_version=%s token_host=%s",
+        "kubit_otel configured  mode=%s service_name=%s service_version=%s endpoint=%s",
         branch,
         service_name,
         service_version or "-",
-        _log_token_host(token_endpoint),
+        _log_endpoint_host(endpoint),
     )
 
     return provider
@@ -151,7 +153,7 @@ def configure(
 def attach(
     api_key: str,
     *,
-    token_endpoint: str = DEFAULT_TOKEN_ENDPOINT,
+    endpoint: Optional[str] = None,
     should_export_span: Optional[ShouldExportSpan] = None,
 ) -> TracerProvider:
     """
@@ -166,8 +168,9 @@ def attach(
     ----------
     api_key : str
         Kubit API key (``rg.v1.<payload>.<sig>``).
-    token_endpoint : str
-        URL of the credential endpoint.
+    endpoint : str, optional
+        Trace endpoint URL. See :class:`kubit_otel.exporter.KubitExporter` for
+        resolution precedence.
     should_export_span : callable, optional
         Predicate deciding which spans are forwarded to Kubit.
 
@@ -188,11 +191,11 @@ def attach(
     provider.add_span_processor(
         KubitSpanProcessor(
             api_key=api_key,
-            token_endpoint=token_endpoint,
+            endpoint=endpoint,
             should_export_span=should_export_span,
         )
     )
     logger.info(
-        "kubit_otel attached  token_host=%s", _log_token_host(token_endpoint)
+        "kubit_otel attached  endpoint=%s", _log_endpoint_host(endpoint)
     )
     return provider

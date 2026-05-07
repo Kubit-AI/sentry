@@ -176,7 +176,7 @@ class TestProcessorFiltering:
     """Integration: KubitSpanProcessor.on_end drops based on predicate."""
 
     def _make_processor(self, should_export_span=None):
-        # Patch KubitExporter so the processor can be built without credentials.
+        # Patch KubitExporter so the processor can be built without an OTLP client.
         with patch("kubit_otel.processor.KubitExporter") as exporter_cls:
             exporter_cls.return_value = MagicMock()
             from kubit_otel.processor import KubitSpanProcessor

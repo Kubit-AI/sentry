@@ -49,7 +49,7 @@ export const KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES = [
   "opentelemetry.instrumentation.anthropic",
   "strands-agents",
   "vllm",
-  // Additional scopes this project's transformer aliases per CLAUDE.md
+  // Additional LLM-instrumentation scopes the SDK keeps by default
   // (Braintrust, Logfire, OpenLLMetry/Traceloop family, OpenAI Agents).
   "braintrust",
   "logfire",

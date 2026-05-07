@@ -50,7 +50,7 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
   constructor(config: KubitSpanProcessorConfig) {
     const exporter = new KubitExporter({
       apiKey: config.apiKey,
-      tokenEndpoint: config.tokenEndpoint,
+      endpoint: config.endpoint,
     });
 
     const bufferConfig: BufferConfig = {

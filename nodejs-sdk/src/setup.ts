@@ -5,7 +5,6 @@
 import type { TracerProvider } from "@opentelemetry/api";
 import { resourceFromAttributes, type Resource } from "@opentelemetry/resources";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { DEFAULT_TOKEN_ENDPOINT } from "./credentials";
 import { logger, redactEndpoint } from "./logger";
 import { KubitSpanProcessor } from "./processor";
 import type { ShouldExportSpan } from "./spanFilter";
@@ -17,8 +16,12 @@ export interface ConfigureOptions {
   serviceName?: string;
   /** Version of the service. */
   serviceVersion?: string;
-  /** URL of the credential endpoint. */
-  tokenEndpoint?: string;
+  /**
+   * Trace endpoint URL. See {@link KubitExporter} for resolution precedence
+   * (explicit arg → `KUBIT_OTEL_ENDPOINT` env → `OTEL_EXPORTER_OTLP_*` →
+   * `https://kubit-ingest.kubit.ai/v1/traces`).
+   */
+  endpoint?: string;
   /** Additional OTel resource attributes to include. */
   resourceAttributes?: Record<string, string>;
   /**
@@ -59,7 +62,6 @@ function buildResource(
  */
 export function configure(options: ConfigureOptions): TracerProvider {
   const serviceName = options.serviceName ?? "default";
-  const tokenEndpoint = options.tokenEndpoint ?? DEFAULT_TOKEN_ENDPOINT;
   const resource = buildResource(
     serviceName,
     options.serviceVersion,
@@ -67,7 +69,7 @@ export function configure(options: ConfigureOptions): TracerProvider {
   );
   const processor = new KubitSpanProcessor({
     apiKey: options.apiKey,
-    tokenEndpoint,
+    endpoint: options.endpoint,
     shouldExportSpan: options.shouldExportSpan,
   });
 
@@ -80,7 +82,7 @@ export function configure(options: ConfigureOptions): TracerProvider {
   logger.info(
     `kubit_otel configured  service_name=${serviceName} ` +
       `service_version=${options.serviceVersion ?? "-"} ` +
-      `token_host=${redactEndpoint(tokenEndpoint)}`,
+      `endpoint=${redactEndpoint(options.endpoint ?? "<from OTEL_EXPORTER_OTLP_*>")}`,
   );
 
   return provider;
