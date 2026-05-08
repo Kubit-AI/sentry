@@ -12,13 +12,8 @@ DEFAULT_URL = "https://otel.kubit.ai/v1/traces"
 
 @pytest.fixture
 def clean_otlp_env(monkeypatch):
-    """Clear all endpoint-related env vars so each test starts from a known state."""
-    for key in (
-        "KUBIT_OTEL_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-    ):
-        monkeypatch.delenv(key, raising=False)
+    """Clear endpoint-related env vars so each test starts from a known state."""
+    monkeypatch.delenv("KUBIT_OTEL_ENDPOINT", raising=False)
 
 
 class TestEndpointResolution:
@@ -52,18 +47,22 @@ class TestEndpointResolution:
 
         assert mock_otlp.call_args.kwargs["endpoint"] == "https://env.example/v1/traces"
 
-    def test_otel_env_skips_our_default(self, clean_otlp_env, monkeypatch):
+    def test_standard_otlp_env_vars_are_ignored(self, clean_otlp_env, monkeypatch):
+        # The standard OTel OTLP env vars are intentionally NOT consulted —
+        # they are process-wide and would silently redirect Kubit traces if
+        # another OTel-based SDK in the same process sets them.
         monkeypatch.setenv(
             "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://otel.example/v1/traces"
+        )
+        monkeypatch.setenv(
+            "OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel-base.example/v1/traces"
         )
         from kubit_otel.exporter import KubitExporter
 
         with patch("kubit_otel.exporter.OTLPSpanExporter") as mock_otlp:
             KubitExporter(api_key="rg.v1.x.y")
 
-        # No explicit endpoint passed — let the underlying OTLP exporter resolve it.
-        assert "endpoint" not in mock_otlp.call_args.kwargs
-        assert mock_otlp.call_args.kwargs["headers"] == {"x-api-key": "rg.v1.x.y"}
+        assert mock_otlp.call_args.kwargs["endpoint"] == DEFAULT_URL
 
 
 class TestDelegation:

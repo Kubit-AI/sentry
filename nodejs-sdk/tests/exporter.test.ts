@@ -24,8 +24,6 @@ beforeEach(() => {
   mockShutdown.mockReset().mockResolvedValue(undefined);
   mockForceFlush.mockReset().mockResolvedValue(undefined);
   delete process.env.KUBIT_OTEL_ENDPOINT;
-  delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
-  delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 });
 
 describe("KubitExporter — endpoint resolution", () => {
@@ -53,13 +51,22 @@ describe("KubitExporter — endpoint resolution", () => {
     expect(constructorCalls[0].url).toBe("https://env.example/v1/traces");
   });
 
-  it("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT skips our default and lets the inner exporter resolve", async () => {
+  it("ignores standard OTEL_EXPORTER_OTLP_* env vars and falls through to the default", async () => {
+    // The standard OTel OTLP env vars are intentionally not consulted —
+    // they are process-wide and would silently redirect Kubit traces if
+    // another OTel-based SDK in the same process sets them.
     process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT =
       "https://otel.example/v1/traces";
-    const { KubitExporter } = await import("../src/exporter");
-    new KubitExporter({ apiKey: "rg.v1.x.y" });
-    expect(constructorCalls[0].url).toBeUndefined();
-    expect(constructorCalls[0].headers).toEqual({ "x-api-key": "rg.v1.x.y" });
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otel-base.example/v1/traces";
+    try {
+      const { KubitExporter } = await import("../src/exporter");
+      new KubitExporter({ apiKey: "rg.v1.x.y" });
+      expect(constructorCalls[0].url).toBe(DEFAULT);
+    } finally {
+      delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+      delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    }
   });
 });
 

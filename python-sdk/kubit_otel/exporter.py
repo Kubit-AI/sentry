@@ -23,28 +23,24 @@ DEFAULT_ENDPOINT = "https://otel.kubit.ai/v1/traces"
 KUBIT_OTEL_ENDPOINT_ENV = "KUBIT_OTEL_ENDPOINT"
 
 
-def _resolve_endpoint(explicit: Optional[str]) -> Optional[str]:
+def _resolve_endpoint(explicit: Optional[str]) -> str:
     """
     Resolve the trace endpoint URL.
 
     Precedence (first non-empty wins):
         1. explicit ``endpoint`` arg
         2. ``KUBIT_OTEL_ENDPOINT`` env var
-        3. ``None`` — let ``OTLPSpanExporter`` honour
-           ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` /
-           ``OTEL_EXPORTER_OTLP_ENDPOINT``; if neither is set, fall back to
-           Kubit's default below.
+        3. built-in default (``DEFAULT_ENDPOINT``).
+
+    The standard ``OTEL_EXPORTER_OTLP_*`` env vars are intentionally **not**
+    honoured — they are process-wide and would silently redirect Kubit
+    traces if another OTel-based SDK in the same process sets them.
     """
     if explicit:
         return explicit
     env = os.environ.get(KUBIT_OTEL_ENDPOINT_ENV)
     if env:
         return env
-    if any(
-        os.environ.get(k)
-        for k in ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT")
-    ):
-        return None
     return DEFAULT_ENDPOINT
 
 
@@ -69,9 +65,9 @@ class KubitExporter(SpanExporter):
         request header on every batch.
     endpoint : str, optional
         Full trace endpoint URL. Resolution precedence: explicit arg →
-        ``KUBIT_OTEL_ENDPOINT`` env → ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` /
-        ``OTEL_EXPORTER_OTLP_ENDPOINT`` → built-in default
-        ``https://otel.kubit.ai/v1/traces``.
+        ``KUBIT_OTEL_ENDPOINT`` env → built-in default
+        ``https://otel.kubit.ai/v1/traces``. The standard
+        ``OTEL_EXPORTER_OTLP_*`` env vars are not consulted.
     """
 
     def __init__(
@@ -81,13 +77,12 @@ class KubitExporter(SpanExporter):
         endpoint: Optional[str] = None,
     ) -> None:
         url = _resolve_endpoint(endpoint)
-        kwargs = {"headers": {"x-api-key": api_key}}
-        if url is not None:
-            kwargs["endpoint"] = url
-        self._inner = OTLPSpanExporter(**kwargs)
-        log_target = url or "<from OTEL_EXPORTER_OTLP_*>"
+        self._inner = OTLPSpanExporter(
+            endpoint=url,
+            headers={"x-api-key": api_key},
+        )
         logger.debug(
-            "KubitExporter initialised  endpoint=%s", _redact_endpoint(log_target),
+            "KubitExporter initialised  endpoint=%s", _redact_endpoint(url),
         )
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:

@@ -18,7 +18,7 @@ export interface ConfigureOptions {
   serviceVersion?: string;
   /**
    * Trace endpoint URL. See {@link KubitExporter} for resolution precedence
-   * (explicit arg → `KUBIT_OTEL_ENDPOINT` env → `OTEL_EXPORTER_OTLP_*` →
+   * (explicit arg → `KUBIT_OTEL_ENDPOINT` env →
    * `https://otel.kubit.ai/v1/traces`).
    */
   endpoint?: string;
@@ -82,7 +82,7 @@ export function configure(options: ConfigureOptions): TracerProvider {
   logger.info(
     `kubit_otel configured  service_name=${serviceName} ` +
       `service_version=${options.serviceVersion ?? "-"} ` +
-      `endpoint=${redactEndpoint(options.endpoint ?? "<from OTEL_EXPORTER_OTLP_*>")}`,
+      `endpoint=${redactEndpoint(options.endpoint ?? "<from KUBIT_OTEL_ENDPOINT or default>")}`,
   );
 
   return provider;

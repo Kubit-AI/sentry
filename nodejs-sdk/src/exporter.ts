@@ -23,26 +23,20 @@ export interface KubitExporterConfig {
   apiKey: string;
   /**
    * Full trace endpoint URL. Resolution precedence: explicit arg →
-   * `KUBIT_OTEL_ENDPOINT` env → `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
-   * `OTEL_EXPORTER_OTLP_ENDPOINT` → built-in default
-   * `https://otel.kubit.ai/v1/traces`.
+   * `KUBIT_OTEL_ENDPOINT` env → built-in default
+   * `https://otel.kubit.ai/v1/traces`. The standard `OTEL_EXPORTER_OTLP_*`
+   * env vars are not consulted.
    */
   endpoint?: string;
 }
 
-function resolveEndpoint(explicit: string | undefined): string | undefined {
+function resolveEndpoint(explicit: string | undefined): string {
   if (explicit) return explicit;
   const env =
     typeof process !== "undefined"
       ? process.env?.[KUBIT_OTEL_ENDPOINT_ENV]
       : undefined;
   if (env) return env;
-  const otlpEnv =
-    typeof process !== "undefined"
-      ? process.env?.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ??
-        process.env?.OTEL_EXPORTER_OTLP_ENDPOINT
-      : undefined;
-  if (otlpEnv) return undefined; // let the underlying exporter pick it up
   return DEFAULT_ENDPOINT;
 }
 
@@ -56,7 +50,7 @@ export class KubitExporter implements SpanExporter {
       headers: { "x-api-key": config.apiKey },
     });
     logger.debug(
-      `KubitExporter initialised  endpoint=${redactEndpoint(url ?? "<from OTEL_EXPORTER_OTLP_*>")}`,
+      `KubitExporter initialised  endpoint=${redactEndpoint(url)}`,
     );
   }
 

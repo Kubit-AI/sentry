@@ -11,12 +11,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 @pytest.fixture
 def clean_otlp_env(monkeypatch):
-    for key in (
-        "KUBIT_OTEL_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-    ):
-        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("KUBIT_OTEL_ENDPOINT", raising=False)
 
 
 def _silence_exporter():

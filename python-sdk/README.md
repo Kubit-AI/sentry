@@ -39,7 +39,7 @@ Spans are sent as standard OTLP/HTTP protobuf to the Kubit collector, which norm
 
 `KUBIT_OTEL_LOG_LEVEL` (`debug` | `info` | `warn` | `error`) controls the SDK's internal logger.
 
-The standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` env vars are honored too, sitting between `KUBIT_OTEL_ENDPOINT` and the built-in default in the resolution chain.
+The standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` env vars are intentionally **not** consulted — they are process-wide and would silently redirect Kubit traces if another OTel-based SDK in the same process sets them. Use `KUBIT_OTEL_ENDPOINT` to override.
 
 ### Works alongside other OTel-based SDKs
 
