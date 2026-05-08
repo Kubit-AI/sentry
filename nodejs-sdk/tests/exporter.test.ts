@@ -16,7 +16,7 @@ vi.mock("@opentelemetry/exporter-trace-otlp-proto", () => ({
   },
 }));
 
-const DEFAULT = "https://kubit-ingest.kubit.ai/v1/traces";
+const DEFAULT = "https://otel.kubit.ai/v1/traces";
 
 beforeEach(() => {
   constructorCalls.length = 0;

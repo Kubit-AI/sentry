@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 
-DEFAULT_URL = "https://kubit-ingest.kubit.ai/v1/traces"
+DEFAULT_URL = "https://otel.kubit.ai/v1/traces"
 
 
 @pytest.fixture

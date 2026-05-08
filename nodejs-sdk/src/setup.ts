@@ -19,7 +19,7 @@ export interface ConfigureOptions {
   /**
    * Trace endpoint URL. See {@link KubitExporter} for resolution precedence
    * (explicit arg → `KUBIT_OTEL_ENDPOINT` env → `OTEL_EXPORTER_OTLP_*` →
-   * `https://kubit-ingest.kubit.ai/v1/traces`).
+   * `https://otel.kubit.ai/v1/traces`).
    */
   endpoint?: string;
   /** Additional OTel resource attributes to include. */

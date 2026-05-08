@@ -32,7 +32,7 @@ Spans are sent as standard OTLP/HTTP protobuf to the Kubit collector, which norm
 | Option (kwarg) | Env var | Default |
 | --- | --- | --- |
 | `api_key` | — | _required_ |
-| `endpoint` | `KUBIT_OTEL_ENDPOINT` | `https://kubit-ingest.kubit.ai/v1/traces` |
+| `endpoint` | `KUBIT_OTEL_ENDPOINT` | `https://otel.kubit.ai/v1/traces` |
 | `service_name` | — | `default` |
 | `service_version` | — | _unset_ |
 | `resource_attributes` | — | `{}` |

@@ -6,7 +6,7 @@
 
 ### Changed
 
-- `token_endpoint` → `endpoint` on `configure()`, `attach()`, `KubitSpanProcessor`, and `KubitExporter`. Resolution order (first non-empty wins): explicit arg → `KUBIT_OTEL_ENDPOINT` → `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` → default `https://kubit-ingest.kubit.ai/v1/traces`.
+- `token_endpoint` → `endpoint` on `configure()`, `attach()`, `KubitSpanProcessor`, and `KubitExporter`. Resolution order (first non-empty wins): explicit arg → `KUBIT_OTEL_ENDPOINT` → `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` → default `https://otel.kubit.ai/v1/traces`.
 
 ### Removed
 

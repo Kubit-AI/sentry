@@ -19,7 +19,7 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ENDPOINT = "https://kubit-ingest.kubit.ai/v1/traces"
+DEFAULT_ENDPOINT = "https://otel.kubit.ai/v1/traces"
 KUBIT_OTEL_ENDPOINT_ENV = "KUBIT_OTEL_ENDPOINT"
 
 
@@ -71,7 +71,7 @@ class KubitExporter(SpanExporter):
         Full trace endpoint URL. Resolution precedence: explicit arg →
         ``KUBIT_OTEL_ENDPOINT`` env → ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` /
         ``OTEL_EXPORTER_OTLP_ENDPOINT`` → built-in default
-        ``https://kubit-ingest.kubit.ai/v1/traces``.
+        ``https://otel.kubit.ai/v1/traces``.
     """
 
     def __init__(

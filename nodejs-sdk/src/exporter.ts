@@ -15,7 +15,7 @@ import {
 import type { ExportResult } from "@opentelemetry/core";
 import { logger, redactEndpoint } from "./logger";
 
-export const DEFAULT_ENDPOINT = "https://kubit-ingest.kubit.ai/v1/traces";
+export const DEFAULT_ENDPOINT = "https://otel.kubit.ai/v1/traces";
 export const KUBIT_OTEL_ENDPOINT_ENV = "KUBIT_OTEL_ENDPOINT";
 
 export interface KubitExporterConfig {
@@ -25,7 +25,7 @@ export interface KubitExporterConfig {
    * Full trace endpoint URL. Resolution precedence: explicit arg →
    * `KUBIT_OTEL_ENDPOINT` env → `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
    * `OTEL_EXPORTER_OTLP_ENDPOINT` → built-in default
-   * `https://kubit-ingest.kubit.ai/v1/traces`.
+   * `https://otel.kubit.ai/v1/traces`.
    */
   endpoint?: string;
 }

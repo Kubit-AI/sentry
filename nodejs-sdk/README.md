@@ -50,7 +50,7 @@ For finer-grained control you can compose `KubitSpanProcessor` or the raw `Kubit
 | Option | Env var | Default |
 | --- | --- | --- |
 | `apiKey` | — | _required_ |
-| `endpoint` | `KUBIT_OTEL_ENDPOINT` | `https://kubit-ingest.kubit.ai/v1/traces` |
+| `endpoint` | `KUBIT_OTEL_ENDPOINT` | `https://otel.kubit.ai/v1/traces` |
 | `serviceName` | — | `default` |
 | `serviceVersion` | — | _unset_ |
 | `resourceAttributes` | — | `{}` |
