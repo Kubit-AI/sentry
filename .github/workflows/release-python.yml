@@ -35,6 +35,11 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  # Force any Node-20-based JS actions (e.g. upload-artifact@v5) onto Node 24
+  # until they ship a Node-24 release. Becomes default June 2 2026.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 defaults:
   run:
     working-directory: python-sdk
