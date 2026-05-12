@@ -1,0 +1,121 @@
+# Manual release for python-sdk → PyPI (kubit-otel)
+# Parity: when releasing a stable version, dispatch release-nodejs.yml with the same version.
+name: Release python-sdk
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (PEP 440, e.g. 0.8.0, 0.8.0rc1, 0.8.0b1, 0.8.0.dev1)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run: build + validate but do not publish, commit, or tag'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-python
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: python-sdk
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version (PEP 440 subset)
+        working-directory: .
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|\.dev[0-9]+|\.post[0-9]+)?$ ]]; then
+            echo "Invalid PEP 440 version: $VERSION"
+            exit 1
+          fi
+          echo "Version $VERSION accepted."
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify tag does not already exist
+        working-directory: .
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          TAG="python-sdk-v$VERSION"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists."
+            exit 1
+          fi
+          echo "Tag $TAG is free."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Bump version in pyproject.toml
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i.bak -E 's/^version = "[^"]+"/version = "'"$VERSION"'"/' pyproject.toml
+          rm pyproject.toml.bak
+          grep -E '^version = ' pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip build twine
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest tests/
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Validate built artifacts
+        run: twine check dist/*
+
+      - name: Upload build artifacts to run
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-sdk-dist-${{ inputs.version }}
+          path: python-sdk/dist/*
+          if-no-files-found: error
+
+      - name: Publish to PyPI
+        if: ${{ inputs.dry_run == false }}
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload --non-interactive dist/*
+
+      - name: Commit, tag, and push
+        if: ${{ inputs.dry_run == false }}
+        working-directory: .
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add python-sdk/pyproject.toml
+          git commit -m "Release python-sdk v$VERSION"
+          git tag "python-sdk-v$VERSION"
+          git push origin HEAD:master
+          git push origin "python-sdk-v$VERSION"
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          echo "Dry run complete. Would have published kubit-otel ${{ inputs.version }} to PyPI"
+          echo "and tagged python-sdk-v${{ inputs.version }}. No external side-effects performed."
