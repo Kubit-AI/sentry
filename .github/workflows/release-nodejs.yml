@@ -6,9 +6,22 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release. Stable: X.Y.Z (e.g. 0.8.0). Pre-release: X.Y.Z-rc.N (e.g. 0.8.0-rc.1).'
+        description: 'Version number, X.Y.Z only (e.g. 0.8.0). Do not include rc suffix.'
         required: true
         type: string
+      release_type:
+        description: 'public = stable X.Y.Z (dist-tag latest);  pre-release = X.Y.Z-rc.N (dist-tag next)'
+        required: true
+        type: choice
+        default: public
+        options:
+          - public
+          - pre-release
+      rc_number:
+        description: 'RC number (used only when release_type = pre-release; ignored otherwise)'
+        required: false
+        type: string
+        default: '1'
       dry_run:
         description: 'Dry run: build + validate but do not publish, commit, or tag'
         required: false
@@ -32,23 +45,31 @@ jobs:
     outputs:
       dist_tag: ${{ steps.validate.outputs.dist_tag }}
     steps:
-      - name: Validate version (stable X.Y.Z or pre-release X.Y.Z-rc.N) and pick npm dist-tag
+      - name: Resolve and validate version, pick npm dist-tag
         id: validate
         working-directory: .
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION_INPUT: ${{ steps.validate.outputs.version }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          RC_NUMBER: ${{ inputs.rc_number }}
         run: |
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-            echo "Invalid version: $VERSION"
-            echo "Accepted forms: X.Y.Z (stable) or X.Y.Z-rc.N (release candidate, e.g. 0.8.0-rc.1)."
+          if [[ ! "$VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version: $VERSION_INPUT (must be X.Y.Z, with no rc/pre-release suffix)."
             exit 1
           fi
-          if [[ "$VERSION" == *-rc.* ]]; then
+          if [[ "$RELEASE_TYPE" == "pre-release" ]]; then
+            if [[ ! "$RC_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "Invalid rc_number: $RC_NUMBER (must be a positive integer)."
+              exit 1
+            fi
+            FULL_VERSION="${VERSION_INPUT}-rc.${RC_NUMBER}"
             DIST_TAG=next
           else
+            FULL_VERSION="$VERSION_INPUT"
             DIST_TAG=latest
           fi
-          echo "Version $VERSION accepted; npm dist-tag = $DIST_TAG"
+          echo "Resolved version: $FULL_VERSION (release_type=$RELEASE_TYPE); npm dist-tag = $DIST_TAG"
+          echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
           echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
@@ -60,7 +81,7 @@ jobs:
       - name: Verify tag does not already exist
         working-directory: .
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.validate.outputs.version }}
         run: |
           TAG="nodejs-sdk-v$VERSION"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
@@ -77,7 +98,7 @@ jobs:
 
       - name: Bump version in package.json
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.validate.outputs.version }}
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install dependencies
@@ -98,7 +119,7 @@ jobs:
       - name: Upload build artifacts to run
         uses: actions/upload-artifact@v4
         with:
-          name: nodejs-sdk-dist-${{ inputs.version }}
+          name: nodejs-sdk-dist-${{ steps.validate.outputs.version }}
           path: |
             nodejs-sdk/*.tgz
             nodejs-sdk/dist/**
@@ -114,7 +135,7 @@ jobs:
         if: ${{ inputs.dry_run == false }}
         working-directory: .
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.validate.outputs.version }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -127,6 +148,6 @@ jobs:
       - name: Dry-run summary
         if: ${{ inputs.dry_run == true }}
         run: |
-          echo "Dry run complete. Would have published @kubit-ai/otel ${{ inputs.version }}"
+          echo "Dry run complete. Would have published @kubit-ai/otel ${{ steps.validate.outputs.version }}"
           echo "to npm with dist-tag '${{ steps.validate.outputs.dist_tag }}'"
-          echo "and tagged nodejs-sdk-v${{ inputs.version }}. No external side-effects performed."
+          echo "and tagged nodejs-sdk-v${{ steps.validate.outputs.version }}. No external side-effects performed."

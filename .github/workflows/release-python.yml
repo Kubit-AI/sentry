@@ -6,9 +6,22 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release. Stable: X.Y.Z (e.g. 0.8.0). Pre-release: X.Y.ZrcN (e.g. 0.8.0rc1).'
+        description: 'Version number, X.Y.Z only (e.g. 0.8.0). Do not include rc suffix.'
         required: true
         type: string
+      release_type:
+        description: 'public = stable X.Y.Z;  pre-release = X.Y.ZrcN'
+        required: true
+        type: choice
+        default: public
+        options:
+          - public
+          - pre-release
+      rc_number:
+        description: 'RC number (used only when release_type = pre-release; ignored otherwise)'
+        required: false
+        type: string
+        default: '1'
       dry_run:
         description: 'Dry run: build + validate but do not publish, commit, or tag'
         required: false
@@ -30,17 +43,29 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate version (stable X.Y.Z or pre-release X.Y.ZrcN)
+      - name: Resolve and validate version
+        id: resolve
         working-directory: .
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION_INPUT: ${{ steps.resolve.outputs.version }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          RC_NUMBER: ${{ inputs.rc_number }}
         run: |
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?$ ]]; then
-            echo "Invalid version: $VERSION"
-            echo "Accepted forms: X.Y.Z (stable) or X.Y.ZrcN (release candidate, e.g. 0.8.0rc1)."
+          if [[ ! "$VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version: $VERSION_INPUT (must be X.Y.Z, with no rc/pre-release suffix)."
             exit 1
           fi
-          echo "Version $VERSION accepted."
+          if [[ "$RELEASE_TYPE" == "pre-release" ]]; then
+            if [[ ! "$RC_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "Invalid rc_number: $RC_NUMBER (must be a positive integer)."
+              exit 1
+            fi
+            FULL_VERSION="${VERSION_INPUT}rc${RC_NUMBER}"
+          else
+            FULL_VERSION="$VERSION_INPUT"
+          fi
+          echo "Resolved version: $FULL_VERSION (release_type=$RELEASE_TYPE)"
+          echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,7 +76,7 @@ jobs:
       - name: Verify tag does not already exist
         working-directory: .
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           TAG="python-sdk-v$VERSION"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
@@ -67,7 +92,7 @@ jobs:
 
       - name: Bump version in pyproject.toml
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           sed -i.bak -E 's/^version = "[^"]+"/version = "'"$VERSION"'"/' pyproject.toml
           rm pyproject.toml.bak
@@ -90,7 +115,7 @@ jobs:
       - name: Upload build artifacts to run
         uses: actions/upload-artifact@v4
         with:
-          name: python-sdk-dist-${{ inputs.version }}
+          name: python-sdk-dist-${{ steps.resolve.outputs.version }}
           path: python-sdk/dist/*
           if-no-files-found: error
 
@@ -105,7 +130,7 @@ jobs:
         if: ${{ inputs.dry_run == false }}
         working-directory: .
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -118,5 +143,5 @@ jobs:
       - name: Dry-run summary
         if: ${{ inputs.dry_run == true }}
         run: |
-          echo "Dry run complete. Would have published kubit-otel ${{ inputs.version }} to PyPI"
-          echo "and tagged python-sdk-v${{ inputs.version }}. No external side-effects performed."
+          echo "Dry run complete. Would have published kubit-otel ${{ steps.resolve.outputs.version }} to PyPI"
+          echo "and tagged python-sdk-v${{ steps.resolve.outputs.version }}. No external side-effects performed."
