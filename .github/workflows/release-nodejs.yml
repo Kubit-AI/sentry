@@ -45,14 +45,27 @@ jobs:
     outputs:
       dist_tag: ${{ steps.validate.outputs.dist_tag }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
       - name: Resolve and validate version, pick npm dist-tag
         id: validate
         working-directory: .
         env:
-          VERSION_INPUT: ${{ steps.validate.outputs.version }}
+          VERSION_INPUT: ${{ inputs.version }}
           RELEASE_TYPE: ${{ inputs.release_type }}
           RC_NUMBER: ${{ inputs.rc_number }}
         run: |
+          set -euo pipefail
           if [[ ! "$VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version: $VERSION_INPUT (must be X.Y.Z, with no rc/pre-release suffix)."
             exit 1
@@ -68,15 +81,19 @@ jobs:
             FULL_VERSION="$VERSION_INPUT"
             DIST_TAG=latest
           fi
-          echo "Resolved version: $FULL_VERSION (release_type=$RELEASE_TYPE); npm dist-tag = $DIST_TAG"
+
+          CUR_VERSION=$(node -p "require('./nodejs-sdk/package.json').version")
+          echo "Current version in package.json: $CUR_VERSION"
+          echo "Proposed version:                $FULL_VERSION (release_type=$RELEASE_TYPE, dist-tag=$DIST_TAG)"
+
+          if ! npx --yes semver "$FULL_VERSION" -r ">$CUR_VERSION" >/dev/null 2>&1; then
+            echo "Refusing to release: proposed $FULL_VERSION is not greater than current $CUR_VERSION."
+            exit 1
+          fi
+          echo "OK: $FULL_VERSION > $CUR_VERSION"
+
           echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
           echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify tag does not already exist
         working-directory: .
@@ -89,12 +106,6 @@ jobs:
             exit 1
           fi
           echo "Tag $TAG is free."
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Bump version in package.json
         env:

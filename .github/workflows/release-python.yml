@@ -43,14 +43,26 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Resolve and validate version
         id: resolve
         working-directory: .
         env:
-          VERSION_INPUT: ${{ steps.resolve.outputs.version }}
+          VERSION_INPUT: ${{ inputs.version }}
           RELEASE_TYPE: ${{ inputs.release_type }}
           RC_NUMBER: ${{ inputs.rc_number }}
         run: |
+          set -euo pipefail
           if [[ ! "$VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version: $VERSION_INPUT (must be X.Y.Z, with no rc/pre-release suffix)."
             exit 1
@@ -64,14 +76,23 @@ jobs:
           else
             FULL_VERSION="$VERSION_INPUT"
           fi
-          echo "Resolved version: $FULL_VERSION (release_type=$RELEASE_TYPE)"
-          echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          CUR_VERSION=$(grep -E '^version = ' python-sdk/pyproject.toml | sed -E 's/^version = "([^"]+)"/\1/')
+          echo "Current version in pyproject.toml: $CUR_VERSION"
+          echo "Proposed version:                  $FULL_VERSION"
+
+          python -m pip install --quiet packaging
+          python - <<PYEOF
+          from packaging.version import Version
+          import sys
+          new = Version("$FULL_VERSION")
+          cur = Version("$CUR_VERSION")
+          if new <= cur:
+              sys.exit(f"Refusing to release: proposed {new} is not greater than current {cur}.")
+          print(f"OK: {new} > {cur}")
+          PYEOF
+
+          echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Verify tag does not already exist
         working-directory: .
@@ -84,11 +105,6 @@ jobs:
             exit 1
           fi
           echo "Tag $TAG is free."
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
 
       - name: Bump version in pyproject.toml
         env:
