@@ -12,21 +12,11 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
+from kubit_otel._identity import _SDK_NAME, _sdk_version
 from kubit_otel.processor import KubitSpanProcessor
 from kubit_otel.span_filter import ShouldExportSpan
 
 logger = logging.getLogger(__name__)
-
-_SDK_NAME = "kubit-otel-python"
-
-
-def _sdk_version() -> str:
-    try:
-        from importlib.metadata import version as _pkg_version
-
-        return _pkg_version("kubit-otel")
-    except Exception:
-        return "0.0.0+unknown"
 
 
 def _build_resource(

@@ -8,9 +8,7 @@ import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { logger, redactEndpoint } from "./logger";
 import { KubitSpanProcessor } from "./processor";
 import type { ShouldExportSpan } from "./spanFilter";
-import { VERSION as SDK_VERSION } from "./version";
-
-const SDK_NAME = "kubit-otel-node";
+import { SDK_NAME, VERSION as SDK_VERSION } from "./version";
 
 export interface ConfigureOptions {
   /** Kubit API key (`rg.v1.<payload>.<sig>`). */

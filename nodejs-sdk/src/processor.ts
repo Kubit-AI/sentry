@@ -25,6 +25,7 @@ import {
   isDefaultExportSpan,
   type ShouldExportSpan,
 } from "./spanFilter";
+import { SDK_NAME, VERSION as SDK_VERSION } from "./version";
 
 export interface KubitSpanProcessorConfig extends KubitExporterConfig {
   /**
@@ -77,6 +78,12 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
 
   onStart(span: Span, parentContext: Context): void {
     super.onStart(span, parentContext);
+    // Stamp Kubit SDK identity on every span so it survives even when a
+    // user constructs their TracerProvider's Resource without going through
+    // `configure()` / `buildResource()`. Cylon lifts these two keys into the
+    // observation `metadata`.
+    span.setAttribute("kubit.sdk.name", SDK_NAME);
+    span.setAttribute("kubit.sdk.version", SDK_VERSION);
   }
 
   onEnd(span: ReadableSpan): void {

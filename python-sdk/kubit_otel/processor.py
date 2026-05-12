@@ -12,9 +12,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.context import Context
+from opentelemetry.sdk.trace import ReadableSpan, Span
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+from kubit_otel._identity import _SDK_NAME, _sdk_version
 from kubit_otel.exporter import KubitExporter
 from kubit_otel.span_filter import (
     ShouldExportSpan,
@@ -79,6 +81,10 @@ class KubitSpanProcessor(BatchSpanProcessor):
         self._should_export_span: ShouldExportSpan = (
             should_export_span if should_export_span is not None else is_default_export_span
         )
+        # Cache identity once; ``_sdk_version`` reaches into importlib.metadata
+        # and we don't want to pay that on every span start.
+        self._sdk_name = _SDK_NAME
+        self._sdk_version = _sdk_version()
         logger.debug(
             "KubitSpanProcessor initialised  max_queue_size=%d "
             "schedule_delay_millis=%.0f max_export_batch_size=%d "
@@ -87,6 +93,17 @@ class KubitSpanProcessor(BatchSpanProcessor):
             max_export_batch_size, export_timeout_millis,
             getattr(self._should_export_span, "__name__", repr(self._should_export_span)),
         )
+
+    def on_start(  # type: ignore[override]
+        self, span: Span, parent_context: Optional[Context] = None,
+    ) -> None:
+        # Stamp Kubit SDK identity on every span so it survives even when a
+        # user constructs their TracerProvider's Resource without going through
+        # ``configure()`` / ``_build_resource()``. Cylon lifts these two keys
+        # into the observation ``metadata``.
+        super().on_start(span, parent_context)
+        span.set_attribute("kubit.sdk.name", self._sdk_name)
+        span.set_attribute("kubit.sdk.version", self._sdk_version)
 
     def on_end(self, span: ReadableSpan) -> None:  # type: ignore[override]
         try:
