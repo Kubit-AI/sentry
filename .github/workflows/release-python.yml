@@ -13,10 +13,10 @@ on:
         description: 'public = stable X.Y.Z;  pre-release = X.Y.ZrcN'
         required: true
         type: choice
-        default: public
+        default: pre-release
         options:
-          - public
           - pre-release
+          - public
       rc_number:
         description: 'RC number (used only when release_type = pre-release; ignored otherwise)'
         required: false

@@ -13,10 +13,10 @@ on:
         description: 'public = stable X.Y.Z (dist-tag latest);  pre-release = X.Y.Z-rc.N (dist-tag next)'
         required: true
         type: choice
-        default: public
+        default: pre-release
         options:
-          - public
           - pre-release
+          - public
       rc_number:
         description: 'RC number (used only when release_type = pre-release; ignored otherwise)'
         required: false
@@ -86,7 +86,7 @@ jobs:
           echo "Current version in package.json: $CUR_VERSION"
           echo "Proposed version:                $FULL_VERSION (release_type=$RELEASE_TYPE, dist-tag=$DIST_TAG)"
 
-          if ! npx --yes semver "$FULL_VERSION" -r ">$CUR_VERSION" >/dev/null 2>&1; then
+          if ! npx --yes semver --include-prerelease -r ">$CUR_VERSION" "$FULL_VERSION" >/dev/null 2>&1; then
             echo "Refusing to release: proposed $FULL_VERSION is not greater than current $CUR_VERSION."
             exit 1
           fi
