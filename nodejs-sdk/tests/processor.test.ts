@@ -75,7 +75,7 @@ describe("KubitSpanProcessor — kubit.sdk.* stamping", () => {
     // case where a user assembles their own NodeTracerProvider and just plugs
     // KubitSpanProcessor into spanProcessors[].
     const { KubitSpanProcessor } = await import("../src/processor");
-    const { VERSION } = await import("../src/version");
+    const { SDK_NAME, VERSION } = await import("../src/version");
     const provider = new BasicTracerProvider({
       resource: resourceFromAttributes({ "service.name": "user-app" }),
       spanProcessors: [new KubitSpanProcessor({ apiKey: "rg.v1.x.y" })],
@@ -87,7 +87,7 @@ describe("KubitSpanProcessor — kubit.sdk.* stamping", () => {
 
     const attrs = (span as unknown as { attributes: Record<string, unknown> })
       .attributes;
-    expect(attrs["kubit.sdk.name"]).toBe("kubit-otel-node");
+    expect(attrs["kubit.sdk.name"]).toBe(SDK_NAME);
     expect(attrs["kubit.sdk.version"]).toBe(VERSION);
   });
 
@@ -96,7 +96,7 @@ describe("KubitSpanProcessor — kubit.sdk.* stamping", () => {
     // which synthesize a ReadableSpan and call `onEnd` directly — the `onStart`
     // hook never runs, so attributes must be stamped defensively in `onEnd`.
     const { KubitSpanProcessor } = await import("../src/processor");
-    const { VERSION } = await import("../src/version");
+    const { SDK_NAME, VERSION } = await import("../src/version");
     const proc = new KubitSpanProcessor({
       apiKey: "rg.v1.x.y",
       shouldExportSpan: () => true,
@@ -113,7 +113,7 @@ describe("KubitSpanProcessor — kubit.sdk.* stamping", () => {
 
     proc.onEnd(span);
 
-    expect(span.attributes["kubit.sdk.name"]).toBe("kubit-otel-node");
+    expect(span.attributes["kubit.sdk.name"]).toBe(SDK_NAME);
     expect(span.attributes["kubit.sdk.version"]).toBe(VERSION);
     expect(superEnd).toHaveBeenCalledTimes(1);
     superEnd.mockRestore();
