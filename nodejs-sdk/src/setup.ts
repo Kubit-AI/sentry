@@ -8,6 +8,9 @@ import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { logger, redactEndpoint } from "./logger";
 import { KubitSpanProcessor } from "./processor";
 import type { ShouldExportSpan } from "./spanFilter";
+import { VERSION as SDK_VERSION } from "./version";
+
+const SDK_NAME = "kubit-otel-node";
 
 export interface ConfigureOptions {
   /** Kubit API key (`rg.v1.<payload>.<sig>`). */
@@ -39,6 +42,9 @@ function buildResource(
   const attrs: Record<string, string> = { "service.name": serviceName };
   if (serviceVersion) attrs["service.version"] = serviceVersion;
   if (extra) Object.assign(attrs, extra);
+  // SDK identity is set last so user-supplied attrs cannot clobber it.
+  attrs["kubit.sdk.name"] = SDK_NAME;
+  attrs["kubit.sdk.version"] = SDK_VERSION;
   return resourceFromAttributes(attrs);
 }
 

@@ -86,7 +86,15 @@ class KubitExporter(SpanExporter):
         )
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        return self._inner.export(spans)
+        result = self._inner.export(spans)
+        span_count = len(spans)
+        if result == SpanExportResult.SUCCESS:
+            logger.debug("Exported batch to kubit  span_count=%d", span_count)
+        else:
+            logger.warning(
+                "KubitExporter export failed  span_count=%d", span_count,
+            )
+        return result
 
     def shutdown(self) -> None:
         logger.debug("KubitExporter shutdown")

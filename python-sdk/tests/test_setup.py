@@ -74,6 +74,35 @@ class TestConfigureRegisterPath:
         assert attrs["service.version"] == "1.2.3"
         assert attrs["deployment.environment"] == "prod"
 
+    def test_new_provider_stamps_kubit_sdk_identity(self):
+        import kubit_otel
+        from kubit_otel import configure
+
+        with _silence_exporter():
+            provider = configure(api_key="rg.v1.x.y", service_name="my-app")
+
+        attrs = provider.resource.attributes  # type: ignore[union-attr]
+        assert attrs["kubit.sdk.name"] == "kubit-otel-python"
+        assert attrs["kubit.sdk.version"] == kubit_otel.__version__
+
+    def test_user_resource_attributes_cannot_override_kubit_sdk_identity(self):
+        import kubit_otel
+        from kubit_otel import configure
+
+        with _silence_exporter():
+            provider = configure(
+                api_key="rg.v1.x.y",
+                service_name="my-app",
+                resource_attributes={
+                    "kubit.sdk.name": "evil-spoof",
+                    "kubit.sdk.version": "999.0.0",
+                },
+            )
+
+        attrs = provider.resource.attributes  # type: ignore[union-attr]
+        assert attrs["kubit.sdk.name"] == "kubit-otel-python"
+        assert attrs["kubit.sdk.version"] == kubit_otel.__version__
+
 
 class TestConfigureAttachPath:
     """When a real provider is already installed, configure() attaches to it."""
@@ -156,6 +185,22 @@ class TestConfigureAttachPath:
         assert attrs["host.name"] == "node-17"
         assert attrs["telemetry.sdk.language"] == "python"
         assert attrs["service.name"] == "my-app"
+
+    def test_resource_merge_stamps_kubit_sdk_identity(self):
+        import kubit_otel
+        from kubit_otel import configure
+
+        existing = TracerProvider(
+            resource=Resource.create({"service.name": "host-app"})
+        )
+        trace.set_tracer_provider(existing)
+
+        with _silence_exporter():
+            configure(api_key="rg.v1.x.y", service_name="my-app")
+
+        attrs = existing.resource.attributes
+        assert attrs["kubit.sdk.name"] == "kubit-otel-python"
+        assert attrs["kubit.sdk.version"] == kubit_otel.__version__
 
 
 class TestAttach:

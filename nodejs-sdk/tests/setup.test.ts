@@ -59,6 +59,33 @@ describe("configure()", () => {
     expect(resource.attributes["deployment.environment"]).toBe("prod");
   });
 
+  it("stamps kubit.sdk.name and kubit.sdk.version on the resource", async () => {
+    const { configure } = await loadSetup();
+    const { VERSION } = await import("../src/version");
+    const provider = configure({ apiKey: "rg.v1.x.y", serviceName: "my-app" });
+
+    const resource = (provider as unknown as { _resource: Resource })._resource;
+    expect(resource.attributes["kubit.sdk.name"]).toBe("kubit-otel-node");
+    expect(resource.attributes["kubit.sdk.version"]).toBe(VERSION);
+  });
+
+  it("does not let user resourceAttributes override kubit.sdk identity", async () => {
+    const { configure } = await loadSetup();
+    const { VERSION } = await import("../src/version");
+    const provider = configure({
+      apiKey: "rg.v1.x.y",
+      serviceName: "my-app",
+      resourceAttributes: {
+        "kubit.sdk.name": "evil-spoof",
+        "kubit.sdk.version": "999.0.0",
+      },
+    });
+
+    const resource = (provider as unknown as { _resource: Resource })._resource;
+    expect(resource.attributes["kubit.sdk.name"]).toBe("kubit-otel-node");
+    expect(resource.attributes["kubit.sdk.version"]).toBe(VERSION);
+  });
+
   it("attaches a KubitSpanProcessor to the new provider", async () => {
     const { configure } = await loadSetup();
     const { KubitSpanProcessor } = await import("../src/processor");

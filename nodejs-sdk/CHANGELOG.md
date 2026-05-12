@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+### Added
+
+- `KubitExporter.export()` now logs at `debug` after each successful batch (`Exported batch to kubit  span_count=N`) and at `warn` after a failed batch. Honors `KUBIT_OTEL_LOG_LEVEL`.
+
 ## 0.7.0
 
 **Breaking change.** The SDK now ships spans directly over OTLP/HTTP. The client-side credential exchange has been removed; the API key is sent in the `x-api-key` request header on each export.

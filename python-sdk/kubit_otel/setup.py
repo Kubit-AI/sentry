@@ -17,6 +17,17 @@ from kubit_otel.span_filter import ShouldExportSpan
 
 logger = logging.getLogger(__name__)
 
+_SDK_NAME = "kubit-otel-python"
+
+
+def _sdk_version() -> str:
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("kubit-otel")
+    except Exception:
+        return "0.0.0+unknown"
+
 
 def _build_resource(
     service_name: str,
@@ -28,6 +39,9 @@ def _build_resource(
         attrs["service.version"] = service_version
     if resource_attributes:
         attrs.update(resource_attributes)
+    # SDK identity is set last so user-supplied resource_attributes cannot clobber it.
+    attrs["kubit.sdk.name"] = _SDK_NAME
+    attrs["kubit.sdk.version"] = _sdk_version()
     return Resource.create(attrs)
 
 

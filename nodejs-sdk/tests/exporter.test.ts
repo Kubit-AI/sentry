@@ -71,13 +71,18 @@ describe("KubitExporter — endpoint resolution", () => {
 });
 
 describe("KubitExporter — delegation", () => {
-  it("export delegates to inner OTLPTraceExporter", async () => {
+  it("export delegates to inner OTLPTraceExporter and forwards the result", async () => {
     const { KubitExporter } = await import("../src/exporter");
+    const { ExportResultCode } = await import("@opentelemetry/core");
     const e = new KubitExporter({ apiKey: "rg.v1.x.y" });
     const spans: any = [{}, {}];
     const cb = vi.fn();
+    mockExport.mockImplementation((_spans, innerCb) =>
+      innerCb({ code: ExportResultCode.SUCCESS }),
+    );
     e.export(spans, cb);
-    expect(mockExport).toHaveBeenCalledWith(spans, cb);
+    expect(mockExport).toHaveBeenCalledWith(spans, expect.any(Function));
+    expect(cb).toHaveBeenCalledWith({ code: ExportResultCode.SUCCESS });
   });
 
   it("shutdown delegates", async () => {
@@ -92,5 +97,43 @@ describe("KubitExporter — delegation", () => {
     const e = new KubitExporter({ apiKey: "rg.v1.x.y" });
     await e.forceFlush();
     expect(mockForceFlush).toHaveBeenCalled();
+  });
+});
+
+describe("KubitExporter — export logging", () => {
+  it("logs debug with span count on successful export", async () => {
+    const { KubitExporter } = await import("../src/exporter");
+    const { ExportResultCode } = await import("@opentelemetry/core");
+    const { logger } = await import("../src/logger");
+    const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+    mockExport.mockImplementation((_spans, cb) =>
+      cb({ code: ExportResultCode.SUCCESS }),
+    );
+
+    const e = new KubitExporter({ apiKey: "rg.v1.x.y" });
+    e.export([{}, {}] as any, () => {});
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("span_count=2"),
+    );
+    debugSpy.mockRestore();
+  });
+
+  it("logs warn on failed export", async () => {
+    const { KubitExporter } = await import("../src/exporter");
+    const { ExportResultCode } = await import("@opentelemetry/core");
+    const { logger } = await import("../src/logger");
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    mockExport.mockImplementation((_spans, cb) =>
+      cb({ code: ExportResultCode.FAILED }),
+    );
+
+    const e = new KubitExporter({ apiKey: "rg.v1.x.y" });
+    e.export([{}] as any, () => {});
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("span_count=1"),
+    );
+    warnSpy.mockRestore();
   });
 });

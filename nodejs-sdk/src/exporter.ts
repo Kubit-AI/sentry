@@ -12,7 +12,7 @@ import {
   type ReadableSpan,
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
-import type { ExportResult } from "@opentelemetry/core";
+import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { logger, redactEndpoint } from "./logger";
 
 export const DEFAULT_ENDPOINT = "https://otel.kubit.ai/v1/traces";
@@ -58,7 +58,15 @@ export class KubitExporter implements SpanExporter {
     spans: ReadableSpan[],
     resultCallback: (result: ExportResult) => void,
   ): void {
-    this.inner.export(spans, resultCallback);
+    const spanCount = spans.length;
+    this.inner.export(spans, (result) => {
+      if (result.code === ExportResultCode.SUCCESS) {
+        logger.debug(`Exported batch to kubit  span_count=${spanCount}`);
+      } else {
+        logger.warn(`KubitExporter export failed  span_count=${spanCount}`);
+      }
+      resultCallback(result);
+    });
   }
 
   async shutdown(): Promise<void> {
