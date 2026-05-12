@@ -80,3 +80,28 @@ class TestSpanFiltering:
         # falls back to is_default_export_span. Pin that wiring so silent
         # default-changes show up in this test rather than only in production.
         assert proc._should_export_span is is_default_export_span
+
+
+class TestKubitSdkIdentityStamping:
+    def test_on_start_stamps_kubit_sdk_attrs(self, clean_otlp_env):
+        # Provider whose Resource intentionally lacks kubit.sdk.* — mirrors a
+        # user who assembles their own TracerProvider and just plugs
+        # KubitSpanProcessor in via add_span_processor().
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from kubit_otel._identity import _SDK_NAME, _sdk_version
+        from kubit_otel.processor import KubitSpanProcessor
+
+        provider = TracerProvider(
+            resource=Resource.create({"service.name": "user-app"})
+        )
+        with _silence_exporter():
+            provider.add_span_processor(KubitSpanProcessor(api_key="rg.v1.x.y"))
+
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("op") as span:
+            attrs = dict(span.attributes or {})
+
+        assert attrs["kubit.sdk.name"] == _SDK_NAME
+        assert attrs["kubit.sdk.version"] == _sdk_version()
