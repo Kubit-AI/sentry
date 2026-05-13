@@ -1,2 +1,9 @@
-export const SDK_NAME = "kubit-otel-node";
-export const VERSION = "0.7.2-rc.2";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+const pkg = JSON.parse(
+  readFileSync(join(__dirname, "..", "package.json"), "utf8")
+) as { name: string; version: string };
+
+export const SDK_NAME = pkg.name;
+export const VERSION = pkg.version;

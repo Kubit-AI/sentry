@@ -81,7 +81,9 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
     // Stamp Kubit SDK identity on every span so it survives even when a
     // user constructs their TracerProvider's Resource without going through
     // `configure()` / `buildResource()`. Cylon lifts these two keys into the
-    // observation `metadata`.
+    // observation `metadata`. `onEnd` below stamps the same attributes
+    // defensively to cover bridge exporters that synthesize a ReadableSpan
+    // and invoke `onEnd` directly without going through `onStart`.
     span.setAttribute("kubit.sdk.name", SDK_NAME);
     span.setAttribute("kubit.sdk.version", SDK_VERSION);
   }
@@ -105,7 +107,19 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
       );
       return;
     }
+    this.stampKubitSdkIdentity(span);
     super.onEnd(span);
+  }
+
+  private stampKubitSdkIdentity(span: ReadableSpan): void {
+    const attrs = span.attributes as Record<string, unknown> | undefined;
+    if (!attrs) return;
+    if (attrs["kubit.sdk.name"] === undefined) {
+      attrs["kubit.sdk.name"] = SDK_NAME;
+    }
+    if (attrs["kubit.sdk.version"] === undefined) {
+      attrs["kubit.sdk.version"] = SDK_VERSION;
+    }
   }
 
   async shutdown(): Promise<void> {

@@ -61,17 +61,17 @@ describe("configure()", () => {
 
   it("stamps kubit.sdk.name and kubit.sdk.version on the resource", async () => {
     const { configure } = await loadSetup();
-    const { VERSION } = await import("../src/version");
+    const { SDK_NAME, VERSION } = await import("../src/version");
     const provider = configure({ apiKey: "rg.v1.x.y", serviceName: "my-app" });
 
     const resource = (provider as unknown as { _resource: Resource })._resource;
-    expect(resource.attributes["kubit.sdk.name"]).toBe("kubit-otel-node");
+    expect(resource.attributes["kubit.sdk.name"]).toBe(SDK_NAME);
     expect(resource.attributes["kubit.sdk.version"]).toBe(VERSION);
   });
 
   it("does not let user resourceAttributes override kubit.sdk identity", async () => {
     const { configure } = await loadSetup();
-    const { VERSION } = await import("../src/version");
+    const { SDK_NAME, VERSION } = await import("../src/version");
     const provider = configure({
       apiKey: "rg.v1.x.y",
       serviceName: "my-app",
@@ -82,7 +82,7 @@ describe("configure()", () => {
     });
 
     const resource = (provider as unknown as { _resource: Resource })._resource;
-    expect(resource.attributes["kubit.sdk.name"]).toBe("kubit-otel-node");
+    expect(resource.attributes["kubit.sdk.name"]).toBe(SDK_NAME);
     expect(resource.attributes["kubit.sdk.version"]).toBe(VERSION);
   });
 
