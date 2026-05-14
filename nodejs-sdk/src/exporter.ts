@@ -40,6 +40,15 @@ function resolveEndpoint(explicit: string | undefined): string {
   return DEFAULT_ENDPOINT;
 }
 
+/**
+ * OTel SpanExporter that ships spans to Kubit via OTLP/HTTP.
+ *
+ * **Note:** the default span filter (`isDefaultExportSpan`) and the
+ * user-supplied `mask` hook both live in {@link KubitSpanProcessor}, not
+ * here. Consumers who wrap this exporter in their own `SpanProcessor` must
+ * compose the filter and mask themselves; otherwise un-filtered, un-masked
+ * spans will ship.
+ */
 export class KubitExporter implements SpanExporter {
   private readonly inner: OTLPTraceExporter;
 

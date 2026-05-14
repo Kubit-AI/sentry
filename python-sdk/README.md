@@ -96,6 +96,35 @@ configure(
 configure(api_key="rg.v1.xxx", should_export_span=lambda _span: True)
 ```
 
+## Masking sensitive content
+
+Pass a `mask` function to redact PII, secrets, or regulated data *before* spans leave your process. Masking is opt-in, synchronous, and runs after the filter but before the batch queue — un-masked spans never sit in memory waiting to flush. If the function raises or returns `None`, the SDK drops the span and error-logs (fail-closed).
+
+Helpers live in `kubit_otel.mask`:
+
+```python
+from kubit_otel import configure
+from kubit_otel.mask import set_attr, mask_events
+import re
+
+CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
+
+def mask(span):
+    # 1. Scrub credit-card numbers out of the prompt attribute (OTel GenAI v1).
+    prompt = (span.attributes or {}).get("gen_ai.prompt")
+    if isinstance(prompt, str):
+        set_attr(span, "gen_ai.prompt", CARD_RE.sub("[REDACTED CC]", prompt))
+    # 2. Drop user-message events entirely (OTel GenAI v2 puts prompts here).
+    mask_events(span, lambda e: None if e.name == "gen_ai.user.message" else e)
+    return span
+
+configure(api_key="rg.v1.xxx", mask=mask)
+```
+
+`set_attr` / `delete_attr` work on both spans and events. `mask_events(span, fn)` keeps events for which `fn` returns the event, drops events for which it returns `None`. To drop the entire span, use `should_export_span` — `mask` is a transform, not a filter.
+
+> **Bare `KubitExporter` consumers do not inherit masking.** Masking lives in `KubitSpanProcessor` so dropped spans never enter the batch queue. Wrap the exporter in your own `SpanProcessor` and apply the helpers there.
+
 ## Python compatibility
 
 Python 3.9+

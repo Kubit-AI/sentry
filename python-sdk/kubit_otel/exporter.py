@@ -68,6 +68,14 @@ class KubitExporter(SpanExporter):
         ``KUBIT_OTEL_ENDPOINT`` env → built-in default
         ``https://otel.kubit.ai/v1/traces``. The standard
         ``OTEL_EXPORTER_OTLP_*`` env vars are not consulted.
+
+    Notes
+    -----
+    The default span filter (:func:`kubit_otel.span_filter.is_default_export_span`)
+    and the user-supplied ``mask`` hook both live in
+    :class:`kubit_otel.KubitSpanProcessor`, not here. Consumers who wrap this
+    exporter in their own ``SpanProcessor`` must compose the filter and mask
+    themselves; otherwise un-filtered, un-masked spans will ship.
     """
 
     def __init__(

@@ -20,6 +20,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { KubitExporter, type KubitExporterConfig } from "./exporter";
 import { logger } from "./logger";
+import type { MaskSpan } from "./mask";
 import {
   getInstrumentationScopeName,
   isDefaultExportSpan,
@@ -35,6 +36,14 @@ export interface KubitSpanProcessorConfig extends KubitExporterConfig {
    * filtering entirely.
    */
   shouldExportSpan?: ShouldExportSpan;
+  /**
+   * Sync transform `(span: ReadableSpan) => ReadableSpan` that runs after
+   * `shouldExportSpan` and before the batch queue. Use it together with the
+   * helpers in `@kubit-ai/otel/mask` to redact sensitive content from span
+   * attributes and events. If `mask` throws, the span is dropped
+   * (fail-closed). See the `mask` module for the full contract.
+   */
+  mask?: MaskSpan;
   /** Maximum queue size (default: 2048). */
   maxQueueSize?: number;
   /** Delay between export batches in ms (default: 5000). */
@@ -47,6 +56,7 @@ export interface KubitSpanProcessorConfig extends KubitExporterConfig {
 
 export class KubitSpanProcessor extends BatchSpanProcessor {
   private readonly shouldExportSpan: ShouldExportSpan;
+  private readonly mask: MaskSpan | undefined;
 
   constructor(config: KubitSpanProcessorConfig) {
     const exporter = new KubitExporter({
@@ -66,13 +76,15 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
     this.shouldExportSpan =
       config.shouldExportSpan ??
       (({ otelSpan }) => isDefaultExportSpan(otelSpan));
+    this.mask = config.mask;
 
     logger.debug(
       `KubitSpanProcessor initialised  maxQueueSize=${bufferConfig.maxQueueSize} ` +
         `scheduledDelayMillis=${bufferConfig.scheduledDelayMillis} ` +
         `maxExportBatchSize=${bufferConfig.maxExportBatchSize} ` +
         `exportTimeoutMillis=${bufferConfig.exportTimeoutMillis} ` +
-        `shouldExportSpan=${config.shouldExportSpan ? "custom" : "default"}`
+        `shouldExportSpan=${config.shouldExportSpan ? "custom" : "default"} ` +
+        `mask=${config.mask ? "custom" : "none"}`
     );
   }
 
@@ -107,17 +119,47 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
       );
       return;
     }
-    this.stampKubitSdkIdentity(span);
-    super.onEnd(span);
+    let outSpan: ReadableSpan = span;
+    if (this.mask) {
+      try {
+        const masked = this.mask(span);
+        if (masked == null) {
+          logger.error(
+            `mask returned null; dropping span (use shouldExportSpan to filter)  ` +
+              `span_name=${span.name}`
+          );
+          return;
+        }
+        outSpan = masked;
+      } catch (err) {
+        // Fail-closed: a mask that throws must never leak un-masked data.
+        logger.error(
+          `mask raised; dropping span  span_name=${span.name} ` +
+            `span_id=${span.spanContext?.().spanId ?? "-"} ` +
+            `err=${(err as Error)?.message ?? String(err)}`
+        );
+        return;
+      }
+    }
+    // Re-stamp SDK identity. When a mask ran, force-overwrite so an
+    // overzealous mask cannot strip Cylon's per-SDK identification. When no
+    // mask is configured, fill-if-missing — covering bridge exporters that
+    // synthesize a ReadableSpan and invoke onEnd directly without going
+    // through onStart.
+    this.stampKubitSdkIdentity(outSpan, this.mask !== undefined);
+    super.onEnd(outSpan);
   }
 
-  private stampKubitSdkIdentity(span: ReadableSpan): void {
+  private stampKubitSdkIdentity(
+    span: ReadableSpan,
+    force: boolean,
+  ): void {
     const attrs = span.attributes as Record<string, unknown> | undefined;
     if (!attrs) return;
-    if (attrs["kubit.sdk.name"] === undefined) {
+    if (force || attrs["kubit.sdk.name"] === undefined) {
       attrs["kubit.sdk.name"] = SDK_NAME;
     }
-    if (attrs["kubit.sdk.version"] === undefined) {
+    if (force || attrs["kubit.sdk.version"] === undefined) {
       attrs["kubit.sdk.version"] = SDK_VERSION;
     }
   }

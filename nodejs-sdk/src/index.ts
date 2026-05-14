@@ -10,6 +10,7 @@
  */
 
 export { KubitExporter, type KubitExporterConfig } from "./exporter";
+export { type MaskEventFn, type MaskSpan } from "./mask";
 export {
   KubitSpanProcessor,
   type KubitSpanProcessorConfig,

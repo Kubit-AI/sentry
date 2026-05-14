@@ -66,6 +66,7 @@ def _install_logging() -> None:
 _install_logging()
 
 from kubit_otel.exporter import KubitExporter
+from kubit_otel.mask import MaskEventFn, MaskSpan
 from kubit_otel.processor import KubitSpanProcessor
 from kubit_otel.setup import attach, configure
 from kubit_otel.span_filter import (
@@ -83,6 +84,8 @@ __all__ = [
     "KubitSpanProcessor",
     "attach",
     "configure",
+    "MaskEventFn",
+    "MaskSpan",
     "KNOWN_LLM_INSTRUMENTATION_SCOPE_PREFIXES",
     "KUBIT_TRACER_NAME",
     "ShouldExportSpan",

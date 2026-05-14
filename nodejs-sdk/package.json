@@ -1,9 +1,19 @@
 {
   "name": "@kubit-ai/otel",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "OpenTelemetry exporter for Kubit analytics.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mask": {
+      "types": "./dist/mask.d.ts",
+      "default": "./dist/mask.js"
+    }
+  },
   "files": [
     "dist",
     "README.md",

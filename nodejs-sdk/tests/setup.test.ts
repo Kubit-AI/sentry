@@ -100,3 +100,49 @@ describe("configure()", () => {
     expect(processors.some((p) => p instanceof KubitSpanProcessor)).toBe(true);
   });
 });
+
+describe("configure() — mask threading", () => {
+  let originalProvider: ReturnType<typeof trace.getTracerProvider>;
+
+  beforeEach(() => {
+    originalProvider = trace.getTracerProvider();
+    trace.disable();
+  });
+
+  afterEach(() => {
+    trace.disable();
+    trace.setGlobalTracerProvider(originalProvider);
+  });
+
+  it("threads the mask kwarg through to the KubitSpanProcessor", async () => {
+    const { configure } = await loadSetup();
+    const { KubitSpanProcessor } = await import("../src/processor");
+
+    const myMask = (s: unknown) => s as any;
+    const provider = configure({
+      apiKey: "rg.v1.x.y",
+      serviceName: "my-app",
+      mask: myMask,
+    });
+
+    const active = (provider as unknown as { _activeSpanProcessor: unknown })
+      ._activeSpanProcessor as { _spanProcessors?: unknown[] };
+    const processors = active._spanProcessors ?? [active];
+    const proc = processors.find((p) => p instanceof KubitSpanProcessor);
+    expect(proc).toBeDefined();
+    // Read through the same private field the integration tests assert on.
+    expect((proc as unknown as { mask: unknown }).mask).toBe(myMask);
+  });
+
+  it("defaults mask to undefined when not provided", async () => {
+    const { configure } = await loadSetup();
+    const { KubitSpanProcessor } = await import("../src/processor");
+    const provider = configure({ apiKey: "rg.v1.x.y" });
+
+    const active = (provider as unknown as { _activeSpanProcessor: unknown })
+      ._activeSpanProcessor as { _spanProcessors?: unknown[] };
+    const processors = active._spanProcessors ?? [active];
+    const proc = processors.find((p) => p instanceof KubitSpanProcessor);
+    expect((proc as unknown as { mask: unknown }).mask).toBeUndefined();
+  });
+});

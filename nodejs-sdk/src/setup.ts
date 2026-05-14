@@ -6,6 +6,7 @@ import type { TracerProvider } from "@opentelemetry/api";
 import { resourceFromAttributes, type Resource } from "@opentelemetry/resources";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { logger, redactEndpoint } from "./logger";
+import type { MaskSpan } from "./mask";
 import { KubitSpanProcessor } from "./processor";
 import type { ShouldExportSpan } from "./spanFilter";
 import { SDK_NAME, VERSION as SDK_VERSION } from "./version";
@@ -30,6 +31,12 @@ export interface ConfigureOptions {
    * {@link isDefaultExportSpan}. Defaults to LLM-only filtering.
    */
   shouldExportSpan?: ShouldExportSpan;
+  /**
+   * Sync transform that redacts sensitive content from each span before
+   * export. See the `@kubit-ai/otel/mask` module for helpers and the full
+   * contract.
+   */
+  mask?: MaskSpan;
 }
 
 function buildResource(
@@ -75,6 +82,7 @@ export function configure(options: ConfigureOptions): TracerProvider {
     apiKey: options.apiKey,
     endpoint: options.endpoint,
     shouldExportSpan: options.shouldExportSpan,
+    mask: options.mask,
   });
 
   const provider = new NodeTracerProvider({
