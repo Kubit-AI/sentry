@@ -229,3 +229,54 @@ class TestAttach:
         with _silence_exporter():
             with pytest.raises(RuntimeError, match="already registered"):
                 attach(api_key="rg.v1.x.y")
+
+
+class TestMaskThreading:
+    """The mask kwarg must reach the underlying KubitSpanProcessor on both code
+    paths (register-fresh and attach-to-existing)."""
+
+    def test_configure_threads_mask_into_processor(self):
+        from kubit_otel import configure
+        from kubit_otel.processor import KubitSpanProcessor
+
+        def my_mask(span):
+            return span
+
+        with _silence_exporter():
+            provider = configure(api_key="rg.v1.x.y", service_name="x", mask=my_mask)
+
+        active = provider._active_span_processor  # type: ignore[attr-defined]
+        span_procs = getattr(active, "_span_processors", [active])
+        kubit_procs = [p for p in span_procs if isinstance(p, KubitSpanProcessor)]
+        assert len(kubit_procs) == 1
+        assert kubit_procs[0]._mask is my_mask  # type: ignore[attr-defined]
+
+    def test_configure_default_mask_is_none(self):
+        from kubit_otel import configure
+        from kubit_otel.processor import KubitSpanProcessor
+
+        with _silence_exporter():
+            provider = configure(api_key="rg.v1.x.y")
+
+        active = provider._active_span_processor  # type: ignore[attr-defined]
+        span_procs = getattr(active, "_span_processors", [active])
+        kubit_procs = [p for p in span_procs if isinstance(p, KubitSpanProcessor)]
+        assert kubit_procs[0]._mask is None  # type: ignore[attr-defined]
+
+    def test_attach_threads_mask_into_processor(self):
+        from kubit_otel import attach
+        from kubit_otel.processor import KubitSpanProcessor
+
+        def my_mask(span):
+            return span
+
+        existing = TracerProvider()
+        trace.set_tracer_provider(existing)
+
+        with _silence_exporter():
+            attach(api_key="rg.v1.x.y", mask=my_mask)
+
+        active = existing._active_span_processor  # type: ignore[attr-defined]
+        span_procs = getattr(active, "_span_processors", [active])
+        kubit_procs = [p for p in span_procs if isinstance(p, KubitSpanProcessor)]
+        assert kubit_procs[-1]._mask is my_mask  # type: ignore[attr-defined]

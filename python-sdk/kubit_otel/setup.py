@@ -13,6 +13,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
 from kubit_otel._identity import _SDK_NAME, _sdk_version
+from kubit_otel.mask import MaskSpan
 from kubit_otel.processor import KubitSpanProcessor
 from kubit_otel.span_filter import ShouldExportSpan
 
@@ -84,6 +85,7 @@ def configure(
     endpoint: Optional[str] = None,
     resource_attributes: Optional[dict] = None,
     should_export_span: Optional[ShouldExportSpan] = None,
+    mask: Optional[MaskSpan] = None,
 ) -> TracerProvider:
     """
     Configure OpenTelemetry with the Kubit exporter.
@@ -117,6 +119,9 @@ def configure(
     should_export_span : callable, optional
         Predicate deciding which spans are forwarded to Kubit. See
         :mod:`kubit_otel.span_filter`. Defaults to LLM-only filtering.
+    mask : callable, optional
+        Sync transform that redacts sensitive content from each span before
+        export. See :mod:`kubit_otel.mask` for helpers and the full contract.
 
     Returns
     -------
@@ -129,6 +134,7 @@ def configure(
         api_key=api_key,
         endpoint=endpoint,
         should_export_span=should_export_span,
+        mask=mask,
     )
 
     existing = trace.get_tracer_provider()
@@ -159,6 +165,7 @@ def attach(
     *,
     endpoint: Optional[str] = None,
     should_export_span: Optional[ShouldExportSpan] = None,
+    mask: Optional[MaskSpan] = None,
 ) -> TracerProvider:
     """
     Attach ``KubitSpanProcessor`` to the currently-registered global provider.
@@ -177,6 +184,9 @@ def attach(
         resolution precedence.
     should_export_span : callable, optional
         Predicate deciding which spans are forwarded to Kubit.
+    mask : callable, optional
+        Sync transform that redacts sensitive content from each span before
+        export. See :mod:`kubit_otel.mask` for helpers and the full contract.
 
     Returns
     -------
@@ -197,6 +207,7 @@ def attach(
             api_key=api_key,
             endpoint=endpoint,
             should_export_span=should_export_span,
+            mask=mask,
         )
     )
     logger.info(

@@ -125,6 +125,39 @@ new KubitSpanProcessor({
 new KubitSpanProcessor({ apiKey: "rg.v1.xxx", shouldExportSpan: () => true });
 ```
 
+## Masking sensitive content
+
+Pass a `mask` function to redact PII, secrets, or regulated data *before* spans leave your process. Masking is opt-in, synchronous, and runs after the filter but before the batch queue — un-masked spans never sit in memory waiting to flush. If the function throws or returns `null`/`undefined`, the SDK ships a *tombstone* in place of the span: trace structure and timing are preserved, but all payload-bearing fields (attributes, events) are wiped, `status` is forced to `ERROR`, and a `kubit.sdk.mask_error` attribute names the cause. The full error (with stack) is logged at `error` level so you can fix the offending mask code.
+
+> **Author your mask defensively.** It runs on *every* span your app emits — top-level LLM calls, child tool-call spans, retries, framework-internal spans (LangGraph, Mastra, Vercel AI SDK, …). If your mask only knows the shape of your top-level calls, child spans that copy slices of your prompt may slip through unmasked. Either handle every span shape, or scope your logic to an allow-list (e.g. by `span.name` or `span.instrumentationScope.name`).
+
+Helpers live in `@kubit-ai/otel/mask`:
+
+```ts
+import { configure } from "@kubit-ai/otel";
+import { setAttr, maskEvents } from "@kubit-ai/otel/mask";
+
+const CARD_RE = /\b(?:\d[ -]*?){13,19}\b/g;
+
+configure({
+  apiKey: "rg.v1.xxx",
+  mask: (span) => {
+    // 1. Scrub credit-card numbers out of the prompt attribute (OTel GenAI v1).
+    const prompt = (span.attributes as Record<string, unknown>)["gen_ai.prompt"];
+    if (typeof prompt === "string") {
+      setAttr(span, "gen_ai.prompt", prompt.replace(CARD_RE, "[REDACTED CC]"));
+    }
+    // 2. Drop user-message events entirely (OTel GenAI v2 puts prompts here).
+    maskEvents(span, (e) => (e.name === "gen_ai.user.message" ? null : e));
+    return span;
+  },
+});
+```
+
+`setAttr` / `deleteAttr` work on both spans and events. `maskEvents(span, fn)` keeps events for which `fn` returns the event, drops events for which it returns `null` or `undefined`. To drop the entire span, use `shouldExportSpan` — `mask` is a transform, not a filter.
+
+> **Bare `KubitExporter` consumers do not inherit masking.** Masking lives in `KubitSpanProcessor` so dropped spans never enter the batch queue. Wrap the exporter in your own `SpanProcessor` and apply the helpers there.
+
 ## Compatibility
 
 - Node.js 18+
