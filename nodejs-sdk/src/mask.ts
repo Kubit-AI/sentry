@@ -32,8 +32,12 @@
  * - must not perform I/O or network calls (it runs on the producer thread)
  * - must return a `ReadableSpan` (typically the same one it received, mutated
  *   in place via these helpers)
- * - if it throws, the SDK **drops the span and error-logs**; un-masked data is
- *   never shipped (fail-closed)
+ * - if it throws (or returns `null`/`undefined`), the SDK ships a **tombstone**
+ *   in place of the span: trace structure and timing are preserved,
+ *   payload-bearing fields (attributes, events) are wiped, `status` is forced
+ *   to `ERROR`, and a `kubit.sdk.mask_error` attribute names the cause.
+ *   Un-masked data is never shipped (fail-closed). The full error (with stack)
+ *   is logged at `error` level so the offending mask code can be fixed.
  *
  * To drop a span outright, use `shouldExportSpan` instead — mask is a
  * transform, not a filter.
@@ -108,8 +112,8 @@ export function deleteAttr(target: AttrTarget, key: string): void {
  *
  * The span's underlying events array is rewritten in place with the result.
  * Order is preserved for kept events. If `fn` throws, the exception
- * propagates — the outer mask path's fail-closed handler will then drop the
- * whole span, so half-masked events never ship.
+ * propagates — the outer mask path's fail-closed handler will then tombstone
+ * the whole span, so half-masked events never ship.
  */
 export function maskEvents(span: ReadableSpan, fn: MaskEventFn): void {
   const raw = (span as { events?: TimedEvent[] }).events;

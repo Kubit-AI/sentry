@@ -135,7 +135,12 @@ class TestMaskIntegration:
         assert mask_calls == [span]
         super_end.assert_called_once()
 
-    def test_mask_exception_drops_span_fail_closed(self, clean_otlp_env):
+    def test_mask_exception_tombstones_span_fail_closed(self, clean_otlp_env):
+        # Fail-closed semantics: a mask that raises must never leak un-masked
+        # data, AND must not break trace structure by dropping the span. The
+        # processor emits a payload-free tombstone instead.
+        from opentelemetry.trace.status import StatusCode
+
         from kubit_otel.processor import KubitSpanProcessor
 
         def boom(_s):
@@ -154,22 +159,29 @@ class TestMaskIntegration:
             with patch("kubit_otel.processor.logger.error") as log_error:
                 proc.on_end(_make_span())
 
-        super_end.assert_not_called()
-        # PRD story #11: the fail-closed path must surface the failure so a
-        # buggy mask is visible without the data it was meant to hide.
+        # Tombstone delivered to BatchSpanProcessor, not dropped.
+        super_end.assert_called_once()
+        tombstone = super_end.call_args.args[0]
+        assert tombstone.attributes["kubit.sdk.mask_error"] == "RuntimeError"
+        assert tombstone.status.status_code == StatusCode.ERROR
+        assert tombstone.status.description == "kubit-otel mask failed"
+        # Payload-bearing fields wiped — no events, only the marker + the
+        # re-stamped SDK identity (asserted in a dedicated test below).
+        assert tuple(tombstone.events) == ()
+        # The failure must surface in logs so a buggy mask is visible.
         log_error.assert_called_once()
         msg = log_error.call_args.args[0]
         assert "mask raised" in msg
-        # The %-formatted args carry the span name and exception — assert on
-        # the full rendered message so we catch any change to either.
         rendered = msg % log_error.call_args.args[1:]
         assert "test-span" in rendered
         assert "kaboom" in rendered
 
-    def test_mask_returning_none_drops_span(self, clean_otlp_env):
-        # None is a contract violation (drop via should_export_span instead),
-        # so treat it like an error path — drop the span rather than
-        # propagate None into BatchSpanProcessor.on_end which would crash.
+    def test_mask_returning_none_tombstones_span(self, clean_otlp_env):
+        # None is a contract violation (drop via should_export_span instead).
+        # Treat it like the exception path — tombstone rather than drop, so
+        # children spans don't end up orphaned.
+        from opentelemetry.trace.status import StatusCode
+
         from kubit_otel.processor import KubitSpanProcessor
 
         with _silence_exporter():
@@ -183,9 +195,67 @@ class TestMaskIntegration:
             with patch("kubit_otel.processor.logger.error") as log_error:
                 proc.on_end(_make_span())
 
-        super_end.assert_not_called()
+        super_end.assert_called_once()
+        tombstone = super_end.call_args.args[0]
+        assert tombstone.attributes["kubit.sdk.mask_error"] == "returned_none"
+        assert tombstone.status.status_code == StatusCode.ERROR
         log_error.assert_called_once()
         assert "mask returned None" in log_error.call_args.args[0]
+
+    def test_tombstone_preserves_structure_and_restamps_sdk_identity(self, clean_otlp_env):
+        # End-to-end: a mask failure on a real ReadableSpan must produce a
+        # tombstone that (a) keeps name + trace/span IDs so the trace tree is
+        # intact, (b) carries the SDK identity stamps via the force=True path,
+        # (c) drops payload (events, original user attrs).
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from kubit_otel._identity import _SDK_NAME, _sdk_version
+        from kubit_otel.processor import KubitSpanProcessor
+        from kubit_otel.span_filter import KUBIT_TRACER_NAME
+
+        def boom(_s):
+            raise ValueError("oops")
+
+        captured: list = []
+
+        with _silence_exporter():
+            proc = KubitSpanProcessor(
+                api_key="rg.v1.x.y",
+                should_export_span=lambda _s: True,
+                mask=boom,
+            )
+
+        provider = TracerProvider()
+        provider.add_span_processor(proc)
+        tracer = provider.get_tracer(KUBIT_TRACER_NAME)
+
+        original_super_on_end = BatchSpanProcessor.on_end
+
+        def capture(self, span):
+            captured.append(span)
+            return original_super_on_end(self, span)
+
+        with patch.object(BatchSpanProcessor, "on_end", capture):
+            with tracer.start_as_current_span("user-op") as s:
+                s.set_attribute("gen_ai.prompt", "ssn 111-22-3333")
+                s.add_event("gen_ai.user.message", {"content": "secret"})
+                trace_id = s.get_span_context().trace_id
+                span_id = s.get_span_context().span_id
+
+        assert len(captured) == 1
+        tombstone = captured[0]
+        # Structure preserved.
+        assert tombstone.name == "user-op"
+        assert tombstone.context.trace_id == trace_id
+        assert tombstone.context.span_id == span_id
+        # Payload wiped.
+        attrs = dict(tombstone.attributes or {})
+        assert "gen_ai.prompt" not in attrs
+        assert tuple(tombstone.events) == ()
+        # Marker + SDK identity present (re-stamp ran on force=True path).
+        assert attrs["kubit.sdk.mask_error"] == "ValueError"
+        assert attrs["kubit.sdk.name"] == _SDK_NAME
+        assert attrs["kubit.sdk.version"] == _sdk_version()
 
     def test_masked_span_is_what_super_receives(self, clean_otlp_env):
         from kubit_otel.processor import KubitSpanProcessor

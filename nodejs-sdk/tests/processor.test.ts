@@ -239,15 +239,24 @@ describe("KubitSpanProcessor — mask integration", () => {
     superEnd.mockRestore();
   });
 
-  it("drops the span fail-closed when mask throws", async () => {
+  it("tombstones the span fail-closed when mask throws", async () => {
     const { KubitSpanProcessor } = await import("../src/processor");
     const { logger } = await import("../src/logger");
+    const { SpanStatusCode } = await import("@opentelemetry/api");
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+    class CustomBoomError extends Error {
+      constructor(msg: string) {
+        super(msg);
+        this.name = "CustomBoomError";
+      }
+    }
+
     const proc = new KubitSpanProcessor({
       apiKey: "rg.v1.x.y",
       shouldExportSpan: () => true,
       mask: () => {
-        throw new Error("kaboom");
+        throw new CustomBoomError("kaboom");
       },
     });
     const superEnd = vi
@@ -256,9 +265,14 @@ describe("KubitSpanProcessor — mask integration", () => {
 
     proc.onEnd(makeMaskableSpan());
 
-    expect(superEnd).not.toHaveBeenCalled();
-    // PRD story #11: a buggy mask must be visible without the data it was
-    // meant to hide. Surface span id + exception class in the log line.
+    // Tombstone delivered, not dropped.
+    expect(superEnd).toHaveBeenCalledTimes(1);
+    const tombstone = superEnd.mock.calls[0]![0] as any;
+    expect(tombstone.attributes["kubit.sdk.mask_error"]).toBe("CustomBoomError");
+    expect(tombstone.status.code).toBe(SpanStatusCode.ERROR);
+    expect(tombstone.status.message).toBe("kubit-otel mask failed");
+    expect(tombstone.events).toEqual([]);
+    // Failure surfaced loudly in logs — span name + exception class + stack.
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const msg = errorSpy.mock.calls[0]![0] as string;
     expect(msg).toContain("mask raised");
@@ -267,12 +281,13 @@ describe("KubitSpanProcessor — mask integration", () => {
     errorSpy.mockRestore();
   });
 
-  it("drops the span when mask returns null", async () => {
+  it("tombstones the span when mask returns null", async () => {
     // Returning null is a contract violation (drop via shouldExportSpan
-    // instead). Treat it like an error path rather than propagate null into
-    // BatchSpanProcessor.onEnd which would crash.
+    // instead). Tombstone rather than drop, so children spans don't end up
+    // orphaned.
     const { KubitSpanProcessor } = await import("../src/processor");
     const { logger } = await import("../src/logger");
+    const { SpanStatusCode } = await import("@opentelemetry/api");
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     const proc = new KubitSpanProcessor({
       apiKey: "rg.v1.x.y",
@@ -285,12 +300,67 @@ describe("KubitSpanProcessor — mask integration", () => {
 
     proc.onEnd(makeMaskableSpan());
 
-    expect(superEnd).not.toHaveBeenCalled();
+    expect(superEnd).toHaveBeenCalledTimes(1);
+    const tombstone = superEnd.mock.calls[0]![0] as any;
+    expect(tombstone.attributes["kubit.sdk.mask_error"]).toBe("returned_null");
+    expect(tombstone.status.code).toBe(SpanStatusCode.ERROR);
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    const msg = errorSpy.mock.calls[0]![0] as string;
-    expect(msg).toContain("mask returned null");
+    expect(errorSpy.mock.calls[0]![0] as string).toContain("mask returned null");
     superEnd.mockRestore();
     errorSpy.mockRestore();
+  });
+
+  it("tombstone preserves trace structure and re-stamps SDK identity", async () => {
+    // End-to-end: a mask failure on a real span must produce a tombstone that
+    // (a) keeps the name + trace/span IDs so the trace tree is intact,
+    // (b) carries the SDK identity stamps via the force=true path,
+    // (c) drops payload-bearing fields.
+    const { KubitSpanProcessor } = await import("../src/processor");
+    const { SDK_NAME, VERSION } = await import("../src/version");
+    const { SpanStatusCode } = await import("@opentelemetry/api");
+
+    const captured: any[] = [];
+    const superEnd = vi
+      .spyOn(BatchSpanProcessor.prototype, "onEnd")
+      .mockImplementation(function (this: any, s: any) {
+        captured.push(s);
+      });
+
+    const provider = new BasicTracerProvider({
+      resource: resourceFromAttributes({ "service.name": "user-app" }),
+      spanProcessors: [
+        new KubitSpanProcessor({
+          apiKey: "rg.v1.x.y",
+          shouldExportSpan: () => true,
+          mask: () => {
+            throw new TypeError("oops");
+          },
+        }),
+      ],
+    });
+
+    const tracer = provider.getTracer("kubit-sdk");
+    const span = tracer.startSpan("user-op");
+    span.setAttribute("gen_ai.prompt", "ssn 111-22-3333");
+    span.addEvent("gen_ai.user.message", { content: "secret" });
+    const { traceId, spanId } = span.spanContext();
+    span.end();
+
+    expect(captured).toHaveLength(1);
+    const tombstone = captured[0];
+    // Structure preserved.
+    expect(tombstone.name).toBe("user-op");
+    expect(tombstone.spanContext().traceId).toBe(traceId);
+    expect(tombstone.spanContext().spanId).toBe(spanId);
+    // Payload wiped.
+    expect(tombstone.attributes["gen_ai.prompt"]).toBeUndefined();
+    expect(tombstone.events).toEqual([]);
+    // Marker + SDK identity present.
+    expect(tombstone.attributes["kubit.sdk.mask_error"]).toBe("TypeError");
+    expect(tombstone.attributes["kubit.sdk.name"]).toBe(SDK_NAME);
+    expect(tombstone.attributes["kubit.sdk.version"]).toBe(VERSION);
+    expect(tombstone.status.code).toBe(SpanStatusCode.ERROR);
+    superEnd.mockRestore();
   });
 
   it("forwards the span returned by mask, not the original", async () => {

@@ -15,6 +15,8 @@ from typing import Optional
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import SpanKind
+from opentelemetry.trace.status import Status, StatusCode
 
 from kubit_otel._identity import _SDK_NAME, _sdk_version
 from kubit_otel.exporter import KubitExporter
@@ -33,6 +35,63 @@ def _format_span_id(span: ReadableSpan) -> str:
     if isinstance(sid, int):
         return format(sid, "016x")
     return "-"
+
+
+_TOMBSTONE_STATUS_DESCRIPTION = "kubit-otel mask failed"
+_TOMBSTONE_MARKER_KEY = "kubit.sdk.mask_error"
+
+
+def _safe_getattr(obj: object, name: str, default: object = None) -> object:
+    try:
+        v = getattr(obj, name, default)
+    except Exception:
+        return default
+    return v if v is not None else default
+
+
+def _build_tombstone(original: ReadableSpan, cause: str) -> ReadableSpan:
+    """
+    Build a payload-free skeleton of ``original`` for the mask-failure path.
+
+    Trace structure is preserved (trace_id/span_id/parent/timing/kind/resource);
+    every field that could carry PII is wiped (attributes, events, link attrs,
+    status.description). Status is forced to ERROR so failures show up in
+    OTel-native error dashboards. A single marker attribute names the cause
+    (exception class name, or the literal ``"returned_none"``).
+
+    This is the last line of defense against a buggy customer mask. It must
+    not fail — every read on ``original`` is wrapped in :func:`_safe_getattr`
+    and the constructor receives sensible defaults when fields are missing.
+    """
+    name_attr = _safe_getattr(original, "name", "[unknown]")
+    name = name_attr if isinstance(name_attr, str) else "[unknown]"
+    kind = _safe_getattr(original, "kind", SpanKind.INTERNAL)
+    if not isinstance(kind, SpanKind):
+        kind = SpanKind.INTERNAL
+    try:
+        return ReadableSpan(
+            name=name,
+            context=_safe_getattr(original, "context"),
+            parent=_safe_getattr(original, "parent"),
+            resource=_safe_getattr(original, "resource"),
+            attributes={_TOMBSTONE_MARKER_KEY: cause},
+            events=(),
+            links=(),
+            kind=kind,
+            instrumentation_scope=_safe_getattr(original, "instrumentation_scope"),
+            status=Status(StatusCode.ERROR, _TOMBSTONE_STATUS_DESCRIPTION),
+            start_time=_safe_getattr(original, "start_time"),
+            end_time=_safe_getattr(original, "end_time"),
+        )
+    except Exception:
+        # Doubly-bad case: the constructor itself rejected our inputs (e.g. a
+        # future OTel SDK tightens a type check). Fall back to a minimal
+        # ReadableSpan with only the fields we know are safe.
+        return ReadableSpan(
+            name=name,
+            attributes={_TOMBSTONE_MARKER_KEY: cause},
+            status=Status(StatusCode.ERROR, _TOMBSTONE_STATUS_DESCRIPTION),
+        )
 
 
 class KubitSpanProcessor(BatchSpanProcessor):
@@ -60,8 +119,11 @@ class KubitSpanProcessor(BatchSpanProcessor):
         Sync function ``(span: ReadableSpan) -> ReadableSpan`` that runs after
         ``should_export_span`` and before the batch queue. Use it together with
         the helpers in :mod:`kubit_otel.mask` to redact sensitive content from
-        span attributes and events. If ``mask`` raises, the span is dropped
-        (fail-closed). See :mod:`kubit_otel.mask` for the full contract.
+        span attributes and events. If ``mask`` raises or returns ``None``, the
+        SDK ships a tombstone (structural skeleton + ``kubit.sdk.mask_error``
+        marker + ``status=ERROR``) in place of the span — un-masked data is
+        never shipped (fail-closed). See :mod:`kubit_otel.mask` for the full
+        contract.
     max_queue_size : int
         Maximum queue size (default: 2048).
     schedule_delay_millis : float
@@ -153,22 +215,27 @@ class KubitSpanProcessor(BatchSpanProcessor):
                 masked = self._mask(span)
             except Exception as exc:
                 # Fail-closed: a mask that raises must never leak un-masked
-                # data. Drop the span and surface the error in logs.
+                # data. Tombstone the span so trace structure survives and the
+                # failure is loudly visible via status=ERROR + marker attr.
                 logger.error(
-                    "mask raised; dropping span  span_name=%s span_id=%s err=%s",
+                    "mask raised; tombstoning span  span_name=%s span_id=%s err=%s",
                     span.name,
                     _format_span_id(span),
                     exc,
+                    exc_info=True,
                 )
-                return
-            if masked is None:
-                logger.error(
-                    "mask returned None; dropping span (use should_export_span to filter)  "
-                    "span_name=%s",
-                    span.name,
-                )
-                return
-            span = masked
+                span = _build_tombstone(span, type(exc).__name__)
+            else:
+                if masked is None:
+                    logger.error(
+                        "mask returned None; tombstoning span (use should_export_span to filter)  "
+                        "span_name=%s span_id=%s",
+                        span.name,
+                        _format_span_id(span),
+                    )
+                    span = _build_tombstone(span, "returned_none")
+                else:
+                    span = masked
         # Re-stamp SDK identity on every path. With a mask we overwrite (an
         # aggressive mask might have stripped the keys); without a mask we
         # fill-if-missing — covers bridge exporters that synthesize a

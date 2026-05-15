@@ -11,7 +11,7 @@
  * `shouldExportSpan`.
  */
 
-import type { Context } from "@opentelemetry/api";
+import { SpanStatusCode, type Context } from "@opentelemetry/api";
 import {
   BatchSpanProcessor,
   type BufferConfig,
@@ -28,6 +28,77 @@ import {
 } from "./spanFilter";
 import { SDK_NAME, VERSION as SDK_VERSION } from "./version";
 
+const TOMBSTONE_STATUS_DESCRIPTION = "kubit-otel mask failed";
+const TOMBSTONE_MARKER_KEY = "kubit.sdk.mask_error";
+
+/**
+ * Build a payload-free skeleton of `original` for the mask-failure path.
+ *
+ * Trace structure is preserved (trace/span IDs, parent, timing, kind,
+ * resource); every field that could carry PII is wiped (attributes, events,
+ * link attrs, status.description). Status is forced to ERROR so failures show
+ * up in OTel-native error dashboards. A single marker attribute names the
+ * cause (exception class name, or the literal `"returned_null"`).
+ *
+ * This is the last line of defense against a buggy customer mask. It must
+ * not throw — defensive reads everywhere, and a final try/catch wraps the
+ * construction with a degenerate fallback if anything in the original is
+ * structurally surprising.
+ */
+function buildTombstone(original: ReadableSpan, cause: string): ReadableSpan {
+  // Defensive readers — every field access on `original` is wrapped so a
+  // pathological input (getter that throws, missing property) can never crash
+  // the tombstone path. This is the last line of defense.
+  const safeRead = <T>(fn: () => T, fallback: T): T => {
+    try {
+      const v = fn();
+      return v == null ? fallback : v;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const name = safeRead(
+    () => (typeof original.name === "string" ? original.name : "[unknown]"),
+    "[unknown]"
+  );
+  const ctx = safeRead(() => original.spanContext(), {
+    traceId: "0".repeat(32),
+    spanId: "0".repeat(16),
+    traceFlags: 0,
+  } as unknown as ReturnType<ReadableSpan["spanContext"]>);
+
+  const tombstone = {
+    name,
+    kind: safeRead(() => original.kind, 0 /* INTERNAL */ as unknown as ReadableSpan["kind"]),
+    spanContext: () => ctx,
+    parentSpanContext: safeRead(
+      () => (original as { parentSpanContext?: unknown }).parentSpanContext,
+      undefined
+    ),
+    startTime: safeRead(() => original.startTime, [0, 0] as [number, number]),
+    endTime: safeRead(() => original.endTime, [0, 0] as [number, number]),
+    status: {
+      code: SpanStatusCode.ERROR,
+      message: TOMBSTONE_STATUS_DESCRIPTION,
+    },
+    attributes: { [TOMBSTONE_MARKER_KEY]: cause } as Record<string, unknown>,
+    links: [],
+    events: [],
+    duration: safeRead(() => original.duration, [0, 0] as [number, number]),
+    ended: true,
+    resource: safeRead(() => original.resource, undefined as unknown as ReadableSpan["resource"]),
+    instrumentationScope: safeRead(
+      () => original.instrumentationScope,
+      undefined as unknown as ReadableSpan["instrumentationScope"]
+    ),
+    droppedAttributesCount: 0,
+    droppedEventsCount: 0,
+    droppedLinksCount: 0,
+  } as unknown as ReadableSpan;
+  return tombstone;
+}
+
 export interface KubitSpanProcessorConfig extends KubitExporterConfig {
   /**
    * Predicate that decides whether a span is forwarded to Kubit. Spans for
@@ -40,8 +111,10 @@ export interface KubitSpanProcessorConfig extends KubitExporterConfig {
    * Sync transform `(span: ReadableSpan) => ReadableSpan` that runs after
    * `shouldExportSpan` and before the batch queue. Use it together with the
    * helpers in `@kubit-ai/otel/mask` to redact sensitive content from span
-   * attributes and events. If `mask` throws, the span is dropped
-   * (fail-closed). See the `mask` module for the full contract.
+   * attributes and events. If `mask` throws or returns `null`/`undefined`, the
+   * SDK ships a tombstone (structural skeleton + `kubit.sdk.mask_error`
+   * marker + `status=ERROR`) in place of the span — un-masked data is never
+   * shipped (fail-closed). See the `mask` module for the full contract.
    */
   mask?: MaskSpan;
   /** Maximum queue size (default: 2048). */
@@ -125,20 +198,26 @@ export class KubitSpanProcessor extends BatchSpanProcessor {
         const masked = this.mask(span);
         if (masked == null) {
           logger.error(
-            `mask returned null; dropping span (use shouldExportSpan to filter)  ` +
-              `span_name=${span.name}`
+            `mask returned null; tombstoning span (use shouldExportSpan to filter)  ` +
+              `span_name=${span.name} ` +
+              `span_id=${span.spanContext?.().spanId ?? "-"}`
           );
-          return;
+          outSpan = buildTombstone(span, "returned_null");
+        } else {
+          outSpan = masked;
         }
-        outSpan = masked;
       } catch (err) {
         // Fail-closed: a mask that throws must never leak un-masked data.
+        // Tombstone the span so trace structure survives and the failure is
+        // loudly visible via status=ERROR + marker attr.
+        const errObj = err as Error;
         logger.error(
-          `mask raised; dropping span  span_name=${span.name} ` +
+          `mask raised; tombstoning span  span_name=${span.name} ` +
             `span_id=${span.spanContext?.().spanId ?? "-"} ` +
-            `err=${(err as Error)?.message ?? String(err)}`
+            `err=${errObj?.message ?? String(err)} ` +
+            `stack=${errObj?.stack ?? "-"}`
         );
-        return;
+        outSpan = buildTombstone(span, errObj?.name ?? "Error");
       }
     }
     // Re-stamp SDK identity. When a mask ran, force-overwrite so an

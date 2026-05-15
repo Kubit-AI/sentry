@@ -29,8 +29,12 @@ The mask function:
 - must not perform I/O or network calls (it runs on the producer thread)
 - must return a :class:`ReadableSpan` (typically the same one it received, mutated
   in place via these helpers)
-- if it raises, the SDK **drops the span and error-logs**; un-masked data is
-  never shipped (fail-closed)
+- if it raises (or returns ``None``), the SDK ships a **tombstone** in place of
+  the span: trace structure and timing are preserved, payload-bearing fields
+  (attributes, events) are wiped, ``status`` is forced to ``ERROR``, and a
+  ``kubit.sdk.mask_error`` attribute names the cause. Un-masked data is never
+  shipped (fail-closed). The full exception (with traceback) is logged at
+  ``error`` level so the offending mask code can be fixed.
 
 To drop a span outright, use ``should_export_span`` instead — mask is a transform,
 not a filter.
@@ -142,7 +146,7 @@ def mask_events(span: ReadableSpan, fn: MaskEventFn) -> None:
         return
     # If `fn` raises mid-iteration, the exception propagates *before* we
     # rewrite `span._events`, so the outer mask path's fail-closed handler
-    # drops the whole span — half-masked events never ship.
+    # tombstones the whole span — half-masked events never ship.
     kept: list = []
     for event in list(raw):
         replacement = fn(event)

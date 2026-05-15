@@ -127,7 +127,9 @@ new KubitSpanProcessor({ apiKey: "rg.v1.xxx", shouldExportSpan: () => true });
 
 ## Masking sensitive content
 
-Pass a `mask` function to redact PII, secrets, or regulated data *before* spans leave your process. Masking is opt-in, synchronous, and runs after the filter but before the batch queue — un-masked spans never sit in memory waiting to flush. If the function throws or returns `null`/`undefined`, the SDK drops the span and error-logs (fail-closed).
+Pass a `mask` function to redact PII, secrets, or regulated data *before* spans leave your process. Masking is opt-in, synchronous, and runs after the filter but before the batch queue — un-masked spans never sit in memory waiting to flush. If the function throws or returns `null`/`undefined`, the SDK ships a *tombstone* in place of the span: trace structure and timing are preserved, but all payload-bearing fields (attributes, events) are wiped, `status` is forced to `ERROR`, and a `kubit.sdk.mask_error` attribute names the cause. The full error (with stack) is logged at `error` level so you can fix the offending mask code.
+
+> **Author your mask defensively.** It runs on *every* span your app emits — top-level LLM calls, child tool-call spans, retries, framework-internal spans (LangGraph, Mastra, Vercel AI SDK, …). If your mask only knows the shape of your top-level calls, child spans that copy slices of your prompt may slip through unmasked. Either handle every span shape, or scope your logic to an allow-list (e.g. by `span.name` or `span.instrumentationScope.name`).
 
 Helpers live in `@kubit-ai/otel/mask`:
 

@@ -98,7 +98,9 @@ configure(api_key="rg.v1.xxx", should_export_span=lambda _span: True)
 
 ## Masking sensitive content
 
-Pass a `mask` function to redact PII, secrets, or regulated data *before* spans leave your process. Masking is opt-in, synchronous, and runs after the filter but before the batch queue — un-masked spans never sit in memory waiting to flush. If the function raises or returns `None`, the SDK drops the span and error-logs (fail-closed).
+Pass a `mask` function to redact PII, secrets, or regulated data *before* spans leave your process. Masking is opt-in, synchronous, and runs after the filter but before the batch queue — un-masked spans never sit in memory waiting to flush. If the function raises or returns `None`, the SDK ships a *tombstone* in place of the span: trace structure and timing are preserved, but all payload-bearing fields (attributes, events) are wiped, `status` is forced to `ERROR`, and a `kubit.sdk.mask_error` attribute names the cause. The full exception (with traceback) is logged at `error` level so you can fix the offending mask code.
+
+> **Author your mask defensively.** It runs on *every* span your app emits — top-level LLM calls, child tool-call spans, retries, framework-internal spans (LangGraph, Mastra, Vercel AI SDK, …). If your mask only knows the shape of your top-level calls, child spans that copy slices of your prompt may slip through unmasked. Either handle every span shape, or scope your logic to an allow-list (e.g. by `span.name` or `span.instrumentation_scope.name`).
 
 Helpers live in `kubit_otel.mask`:
 
