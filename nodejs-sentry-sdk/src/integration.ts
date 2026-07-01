@@ -43,9 +43,13 @@ const teeEvent = (event: Event, config: KubitSentryConfig): void => {
     return;
   }
 
+  // Resolved here, at the impure boundary, so the transform stays pure: a
+  // rolling session reads the clock / storage on each tee.
+  const sessionId = config.getSessionId?.();
+
   let payload;
   try {
-    payload = sentryEventToOtlp(event, config);
+    payload = sentryEventToOtlp(event, config, sessionId);
   } catch {
     return;
   }

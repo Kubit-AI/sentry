@@ -22,6 +22,13 @@ export interface KubitSentryOptions {
   serviceVersion?: string;
   /** When true, failed exports are logged via `console.warn`. */
   debug?: boolean;
+  /**
+   * Session id source. A string, or a function called per teed event to read
+   * the current id (e.g. `createRollingSession(...)`). When set, every exported
+   * span carries a `session.id` attribute. The browser `init()` defaults this to
+   * a 30-min rolling session; elsewhere, omit it for no session id.
+   */
+  sessionId?: string | (() => string | undefined);
 }
 
 /** Fully-resolved config consumed by the transform + exporter. */
@@ -31,10 +38,25 @@ export interface KubitSentryConfig {
   serviceName?: string;
   serviceVersion?: string;
   debug: boolean;
+  /** Resolved session-id reader; absent when no session id was configured. */
+  getSessionId?: () => string | undefined;
 }
 
 const readEnv = (key: string): string | undefined =>
   typeof process !== "undefined" && process.env ? process.env[key] : undefined;
+
+/** Normalize the `sessionId` option (string | function | undefined) to a reader. */
+const resolveSessionProvider = (
+  sessionId: KubitSentryOptions["sessionId"],
+): (() => string | undefined) | undefined => {
+  if (sessionId === undefined) {
+    return undefined;
+  }
+  if (typeof sessionId === "function") {
+    return sessionId;
+  }
+  return () => sessionId;
+};
 
 export const resolveConfig = (
   options: KubitSentryOptions = {},
@@ -44,4 +66,5 @@ export const resolveConfig = (
   serviceName: options.serviceName ?? readEnv("KUBIT_SERVICE_NAME"),
   serviceVersion: options.serviceVersion,
   debug: options.debug ?? false,
+  getSessionId: resolveSessionProvider(options.sessionId),
 });

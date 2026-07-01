@@ -38,7 +38,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke": "npm run build && node scripts/smoke.js",
-    "prepublishOnly": "npm test && npm run build"
+    "prepublishOnly": "npm test && npm run build:all"
   },
   "peerDependencies": {
     "@sentry/core": ">=8.0.0"

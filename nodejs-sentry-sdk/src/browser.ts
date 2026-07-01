@@ -29,6 +29,7 @@
 
 import * as Sentry from "@sentry/browser";
 import { kubitSentryIntegration } from "./integration";
+import { createRollingSession } from "./session";
 import type { KubitSentryOptions } from "./config";
 
 /** Attribute values accepted on a behavior event. */
@@ -65,6 +66,7 @@ export const init = (options: KubitInitOptions = {}): typeof Sentry => {
     serviceName,
     serviceVersion,
     debug,
+    sessionId,
   } = options;
 
   Sentry.init({
@@ -80,6 +82,10 @@ export const init = (options: KubitInitOptions = {}): typeof Sentry => {
         serviceName,
         serviceVersion: serviceVersion ?? release,
         debug,
+        // Default to a 30-min rolling session so every browser consumer gets a
+        // `session.id` for free. Pass your own `sessionId` (string or function,
+        // e.g. createRollingSession({ initialId: ... })) to override.
+        sessionId: sessionId ?? createRollingSession(),
       }),
     ],
   });
@@ -112,3 +118,9 @@ export const trackEvent = (
 
 export { Sentry };
 export { kubitSentryIntegration, createKubitSentryHooks } from "./integration";
+export {
+  createRollingSession,
+  type RollingSessionOptions,
+  type SessionIdProvider,
+  type SessionStorageLike,
+} from "./session";

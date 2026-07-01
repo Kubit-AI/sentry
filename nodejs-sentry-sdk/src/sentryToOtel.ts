@@ -107,6 +107,21 @@ const toAnyValue = (value: unknown): OtlpAnyValue | null => {
   if (value === null || value === undefined) {
     return null;
   }
+  // Plain objects -> OTLP kvlistValue (recursively), so nested structure reaches
+  // the collector as real key/values instead of a JSON string. This is what lets
+  // e.g. each item in a `product_items` array arrive as an object, not a string.
+  // Arrays and scalars are already handled above.
+  if (typeof value === "object") {
+    const values: OtlpKeyValue[] = [];
+    for (const [key, child] of Object.entries(value)) {
+      const childValue = toAnyValue(child);
+      if (childValue !== null) {
+        values.push({ key, value: childValue });
+      }
+    }
+    return { kvlistValue: { values } };
+  }
+  // Non-object, non-scalar leftovers (bigint, symbol, function) -> string.
   try {
     return { stringValue: JSON.stringify(value) };
   } catch {
@@ -169,15 +184,64 @@ const buildResourceAttributes = (
   ];
 };
 
+/** String form of the Sentry user id (`string | number`). */
+const userIdToString = (id: unknown): string | undefined => {
+  if (typeof id === "string") {
+    return id.length > 0 ? id : undefined;
+  }
+  if (typeof id === "number" || typeof id === "bigint") {
+    return String(id);
+  }
+  return undefined;
+};
+
+/**
+ * Event-scoped attributes stamped onto every span: the injected `session.id`
+ * plus the Sentry user identity (`Sentry.setUser`). `user.id` is the join key
+ * for per-user behavior analytics — without it, events can't be grouped by user.
+ */
+const eventScopedAttrs = (event: Event, sessionId?: string): OtlpKeyValue[] => [
+  ...strAttr("session.id", sessionId),
+  ...strAttr("user.id", userIdToString(event.user?.id)),
+  ...strAttr("user.name", event.user?.username),
+  ...strAttr("user.email", event.user?.email),
+];
+
+/**
+ * Append the given attributes to every span. Single choke point so all span
+ * families (transaction root, children, error) get them uniformly. The transform
+ * stays pure — the values are explicit inputs resolved by the impure tee
+ * boundary, not read here.
+ */
+const withScopedAttrs = (
+  spans: OtlpSpan[],
+  attrs: OtlpKeyValue[],
+): OtlpSpan[] =>
+  attrs.length === 0
+    ? spans
+    : spans.map((span) => ({
+        ...span,
+        attributes: [...span.attributes, ...attrs],
+      }));
+
 const buildExportRequest = (
   spans: OtlpSpan[],
   resourceEvent: Event,
   config: KubitSentryConfig,
+  sessionId?: string,
 ): OtlpExportRequest => ({
   resourceSpans: [
     {
       resource: { attributes: buildResourceAttributes(resourceEvent, config) },
-      scopeSpans: [{ scope: { name: SCOPE_NAME, version: SCOPE_VERSION }, spans }],
+      scopeSpans: [
+        {
+          scope: { name: SCOPE_NAME, version: SCOPE_VERSION },
+          spans: withScopedAttrs(
+            spans,
+            eventScopedAttrs(resourceEvent, sessionId),
+          ),
+        },
+      ],
     },
   ],
 });
@@ -185,6 +249,7 @@ const buildExportRequest = (
 export const sentryTransactionToOtlp = (
   event: TransactionEvent,
   config: KubitSentryConfig,
+  sessionId?: string,
 ): OtlpExportRequest => {
   const trace = event.contexts?.trace;
   const spans: OtlpSpan[] = [];
@@ -221,7 +286,7 @@ export const sentryTransactionToOtlp = (
     });
   }
 
-  return buildExportRequest(spans, event, config);
+  return buildExportRequest(spans, event, config, sessionId);
 };
 
 const renderStackFrames = (
@@ -244,13 +309,14 @@ const renderStackFrames = (
 export const sentryErrorToOtlp = (
   event: Event,
   config: KubitSentryConfig,
+  sessionId?: string,
 ): OtlpExportRequest => {
   const trace = event.contexts?.trace;
   // Anchor on the Sentry event_id (32-hex) when there's no trace context,
   // so the transform stays pure (no randomness).
   const traceId = trace?.trace_id ?? event.event_id;
   if (!traceId) {
-    return buildExportRequest([], event, config);
+    return buildExportRequest([], event, config, sessionId);
   }
   // The error span gets its own id derived from the (unique) event_id and is
   // parented under the active span. Reusing `trace.span_id` as the span id
@@ -304,7 +370,7 @@ export const sentryErrorToOtlp = (
     status: { code: STATUS_ERROR, message: primary?.value },
   };
 
-  return buildExportRequest([span], event, config);
+  return buildExportRequest([span], event, config, sessionId);
 };
 
 const isTransactionEvent = (event: Event): event is TransactionEvent =>
@@ -317,7 +383,8 @@ const isTransactionEvent = (event: Event): event is TransactionEvent =>
 export const sentryEventToOtlp = (
   event: Event,
   config: KubitSentryConfig,
+  sessionId?: string,
 ): OtlpExportRequest =>
   isTransactionEvent(event)
-    ? sentryTransactionToOtlp(event, config)
-    : sentryErrorToOtlp(event, config);
+    ? sentryTransactionToOtlp(event, config, sessionId)
+    : sentryErrorToOtlp(event, config, sessionId);

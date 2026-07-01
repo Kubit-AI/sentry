@@ -47,6 +47,92 @@ describe("Transactions", () => {
     expect(attrs["service.name"]).toEqual({ stringValue: "test-app" });
     expect(attrs["service.version"]).toEqual({ stringValue: "1.2.3" });
   });
+
+  it("stamps session.id + user identity (from event.user) onto every span", () => {
+    const event = {
+      type: "transaction",
+      transaction: "t",
+      start_timestamp: 1,
+      timestamp: 2,
+      user: { id: 42, username: "alice", email: "alice@example.com" },
+      contexts: {
+        trace: { trace_id: "a".repeat(32), span_id: "b".repeat(16) },
+      },
+      spans: [
+        {
+          trace_id: "a".repeat(32),
+          span_id: "c".repeat(16),
+          description: "child",
+          start_timestamp: 1,
+          timestamp: 2,
+        },
+      ],
+    } as unknown as TransactionEvent;
+
+    const out = sentryTransactionToOtlp(event, config, "sess-xyz");
+    const spanAttrs = (i: number) =>
+      Object.fromEntries(
+        out.resourceSpans[0].scopeSpans[0].spans[i].attributes.map((a) => [
+          a.key,
+          a.value,
+        ]),
+      );
+    for (const i of [0, 1]) {
+      // user id coerced to string; present on root AND child spans
+      expect(spanAttrs(i)["user.id"]).toEqual({ stringValue: "42" });
+      expect(spanAttrs(i)["user.name"]).toEqual({ stringValue: "alice" });
+      expect(spanAttrs(i)["user.email"]).toEqual({
+        stringValue: "alice@example.com",
+      });
+      expect(spanAttrs(i)["session.id"]).toEqual({ stringValue: "sess-xyz" });
+    }
+  });
+
+  it("encodes object / array-of-object attributes as kvlistValue (not JSON strings)", () => {
+    const event = {
+      type: "transaction",
+      transaction: "order completed",
+      start_timestamp: 1,
+      timestamp: 2,
+      contexts: {
+        trace: {
+          trace_id: "a".repeat(32),
+          span_id: "b".repeat(16),
+          data: {
+            product_items: [
+              { productId: 1, productName: "Urban Runner Pro", inStock: true },
+            ],
+          },
+        },
+      },
+      spans: [],
+    } as unknown as TransactionEvent;
+
+    const out = sentryTransactionToOtlp(event, config);
+    const attrs = Object.fromEntries(
+      firstSpan(out).attributes.map((a) => [a.key, a.value]),
+    );
+    // A JS array maps to arrayValue; each object element maps to kvlistValue
+    // (recursively), with scalars typed per OTLP — no JSON-string blobs.
+    expect(attrs["product_items"]).toEqual({
+      arrayValue: {
+        values: [
+          {
+            kvlistValue: {
+              values: [
+                { key: "productId", value: { intValue: "1" } },
+                {
+                  key: "productName",
+                  value: { stringValue: "Urban Runner Pro" },
+                },
+                { key: "inStock", value: { boolValue: true } },
+              ],
+            },
+          },
+        ],
+      },
+    });
+  });
 });
 
 describe("Timestamps", () => {

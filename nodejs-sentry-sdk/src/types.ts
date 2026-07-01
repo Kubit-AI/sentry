@@ -14,7 +14,8 @@ export type OtlpAnyValue =
   | { intValue: string }
   | { doubleValue: number }
   | { boolValue: boolean }
-  | { arrayValue: { values: OtlpAnyValue[] } };
+  | { arrayValue: { values: OtlpAnyValue[] } }
+  | { kvlistValue: { values: OtlpKeyValue[] } };
 
 export interface OtlpKeyValue {
   key: string;

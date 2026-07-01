@@ -30,6 +30,12 @@ export {
   type KubitSentryConfig,
 } from "./config";
 export {
+  createRollingSession,
+  type RollingSessionOptions,
+  type SessionIdProvider,
+  type SessionStorageLike,
+} from "./session";
+export {
   sentryEventToOtlp,
   sentryTransactionToOtlp,
   sentryErrorToOtlp,
