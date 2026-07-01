@@ -10,9 +10,9 @@
  *       KubitSentry.init({
  *         dsn: "https://...@sentry.io/...",          // your Sentry project
  *         apiKey: "rg.v1...",                         // Kubit ingestion key
- *         endpoint: "https://otel-draft.kubit.ai/v1/traces",
- *         serviceName: "demo-store",
- *         environment: "int",
+ *         endpoint: "https://otel.kubit.ai/v1/traces",
+ *         serviceName: "my-app",
+ *         environment: "production",
  *       });
  *       KubitSentry.trackEvent("Product Added", { productId: 1, price: 49.99 });
  *     </script>
@@ -23,8 +23,8 @@
  * collector. `trackEvent` emits a named, zero-duration root transaction (the
  * "clicked / action" family) whose name flows straight through to Kubit.
  *
- * This entry is additive: the CommonJS `index.ts` (bundler-based consumers like
- * Vega) is untouched. Only `<script>`-tag consumers use this file.
+ * This entry is additive: the CommonJS `index.ts` (bundler-based consumers) is
+ * untouched. Only `<script>`-tag consumers use this file.
  */
 
 import * as Sentry from "@sentry/browser";
@@ -38,7 +38,7 @@ type EventAttributeValue = string | number | boolean;
 export interface KubitInitOptions extends KubitSentryOptions {
   /** Sentry DSN for your error/transaction project. Omit to skip Sentry capture. */
   dsn?: string;
-  /** `deployment.environment` (e.g. "int", "production"). */
+  /** `deployment.environment` (e.g. "staging", "production"). */
   environment?: string;
   /** Release identifier — also used as `service.version` when set. */
   release?: string;

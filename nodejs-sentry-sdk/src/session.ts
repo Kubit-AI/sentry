@@ -12,10 +12,10 @@
  * tied to a known identity; every later window uses `generateId`. This is the
  * "one more layer" some apps want on top of the plain rolling default:
  *
- *     // Halo: plain 30-min rolling, random ids
+ *     // Simple: plain 30-min rolling, random ids
  *     createRollingSession()
  *
- *     // Vega: first window = hashed access token, then roll to generated ids
+ *     // Seeded: first window = a hashed identity, then roll to generated ids
  *     createRollingSession({ initialId: () => hashAccessToken(token) })
  *
  * Persisted to `localStorage` by default so the id survives page navigations;

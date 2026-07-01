@@ -66,7 +66,7 @@ bundle (`npm run build:browser` → `dist/browser/kubit-sentry.global.js`,
   KubitSentry.init({
     dsn: "https://…@sentry.io/…",                 // your Sentry project
     apiKey: "rg.v1…",                              // Kubit ingestion key
-    endpoint: "https://otel-draft.kubit.ai/v1/traces",
+    endpoint: "https://otel.kubit.ai/v1/traces",
     serviceName: "my-app",
     environment: "production",
   });
