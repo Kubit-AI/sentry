@@ -48,6 +48,12 @@ Kubit.
 
 ### Browser, no bundler (`<script>` tag)
 
+> **Use this bundle only on a page that doesn't already load Sentry.** It bundles
+> its own `@sentry/browser` and calls `Sentry.init`; on a page that already has
+> Sentry you'd run two Sentry instances — double-reported errors and duplicated
+> bundle weight. If you have a bundler or an existing Sentry on the page, use the
+> `kubitSentryIntegration` path above against that Sentry instead.
+
 For a static site that can't run a bundler, build the self-contained browser
 bundle (`npm run build:browser` → `dist/browser/kubit-sentry.global.js`,
 `@sentry/browser` bundled in) and drop the one file in:
