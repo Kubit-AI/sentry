@@ -21,7 +21,7 @@ npm install @kubit-ai/sentry
 
 ## Usage
 
-### Integration (recommended)
+### Integration
 
 ```ts
 import * as Sentry from "@sentry/react";
@@ -29,30 +29,22 @@ import { kubitSentryIntegration } from "@kubit-ai/sentry";
 
 Sentry.init({
   dsn: "https://…@sentry.io/…",
+  environment: "production",              // Sentry env → Kubit deployment.environment
   integrations: [
-    kubitSentryIntegration({ serviceName: "my-app" }),
+    kubitSentryIntegration({
+      apiKey: "rg.v1…",                   // required — mint per workspace in the Kubit app
+      serviceName: "my-app",              // optional — names this app inside the workspace
+      // endpoint defaults to prod; set it only to target a non-prod Kubit env
+    }),
   ],
 });
 ```
 
-The integration registers on the Sentry client's `afterSendEvent` hook, so
-Kubit receives a copy of exactly what Sentry sends — after sampling, event
-processors, and your `beforeSend` / `beforeSendTransaction` scrubbing. Events
-Sentry drops are never exported to Kubit.
-
-### Explicit hooks
-
-```ts
-import * as Sentry from "@sentry/browser";
-import { createKubitSentryHooks } from "@kubit-ai/sentry";
-
-const { beforeSend, beforeSendTransaction } = createKubitSentryHooks();
-Sentry.init({ dsn: "…", beforeSend, beforeSendTransaction });
-```
-
-With this style the tee sees the event exactly as the hook receives it. If you
-have your own `beforeSend` that scrubs PII, run your scrubbing first and call
-the Kubit wrapper on the scrubbed event.
+The integration registers on the Sentry client's single `afterSendEvent` hook —
+which covers both errors and transactions — so Kubit receives a copy of exactly
+what Sentry sends, after sampling, event processors, and your `beforeSend` /
+`beforeSendTransaction` scrubbing. Events Sentry drops are never exported to
+Kubit.
 
 ### Browser, no bundler (`<script>` tag)
 
@@ -81,8 +73,8 @@ bundle (`npm run build:browser` → `dist/browser/kubit-sentry.global.js`,
 navigation / `http.client` spans — the "page view" and "api call" families)
 plus the Kubit tee. `KubitSentry.trackEvent(name, attributes)` emits a named,
 zero-duration root transaction the tee exports as one OTLP span. The bundle also
-re-exports `Sentry`, `kubitSentryIntegration`, and `createKubitSentryHooks` on
-the `KubitSentry` global for advanced wiring.
+re-exports `Sentry` and `kubitSentryIntegration` on the `KubitSentry` global for
+advanced wiring.
 
 ## Configuration
 
@@ -94,10 +86,16 @@ the `KubitSentry` global for advanced wiring.
 | `serviceVersion` | —                     | the Sentry event `release`          |
 | `debug`          | —                     | `false`                             |
 
-Mint the `apiKey` for a **Behavior** workspace in the Kubit app (Settings →
-Workspace API Keys). Environment variables are read at runtime in Node; in
-browser builds your bundler must inline them (e.g. via `define` /
-`EnvironmentPlugin`), or pass the values as options instead.
+`apiKey` is the only required value — mint it for a **Behavior** workspace in the
+Kubit app (Settings → Workspace API Keys). `serviceName` is the `service.name`
+resource attribute: it names *this app* within the workspace (set it when several
+apps share one workspace; otherwise the default is fine). The Sentry
+**`environment`** is *not* a Kubit option — set it on `Sentry.init({ environment })`
+and the tee copies it to `deployment.environment`.
+
+Environment variables are read at runtime in Node; in browser builds your bundler
+must inline them (e.g. via `define` / `EnvironmentPlugin`), or pass the values as
+options instead.
 
 **Key handling.** Use a key minted for trace ingestion only. In browser apps
 the key is embedded in the served bundle and visible to end users — treat it

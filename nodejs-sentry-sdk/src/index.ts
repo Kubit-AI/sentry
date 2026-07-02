@@ -8,21 +8,22 @@
  *
  *     Sentry.init({
  *       dsn: "https://...@sentry.io/...",
- *       integrations: [kubitSentryIntegration({ serviceName: "my-app" })],
+ *       integrations: [
+ *         kubitSentryIntegration({ apiKey: "rg.v1...", serviceName: "my-app" }),
+ *       ],
  *     });
  *
- * The ingestion key is read from `KUBIT_OTEL_API_KEY` (or pass `apiKey`); the
- * endpoint from `KUBIT_OTEL_ENDPOINT` (default `https://otel.kubit.ai/v1/traces`).
+ * `apiKey` is the workspace ingestion key you mint in the Kubit app; pass it as
+ * an option (required in the browser) or set `KUBIT_OTEL_API_KEY` in Node. The
+ * endpoint defaults to `https://otel.kubit.ai/v1/traces` (override via `endpoint`
+ * or `KUBIT_OTEL_ENDPOINT` only for a non-prod Kubit env).
  *
  * This SDK does NOT replace Sentry — it runs alongside it and ships a copy of
  * each event to Kubit so the data can be modeled and displayed in the Kubit
  * product.
  */
 
-export {
-  kubitSentryIntegration,
-  createKubitSentryHooks,
-} from "./integration";
+export { kubitSentryIntegration } from "./integration";
 export {
   resolveConfig,
   DEFAULT_ENDPOINT,

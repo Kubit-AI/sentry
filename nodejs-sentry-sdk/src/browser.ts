@@ -117,7 +117,7 @@ export const trackEvent = (
 };
 
 export { Sentry };
-export { kubitSentryIntegration, createKubitSentryHooks } from "./integration";
+export { kubitSentryIntegration } from "./integration";
 export {
   createRollingSession,
   type RollingSessionOptions,
