@@ -1,0 +1,54 @@
+{
+  "name": "@kubit-ai/sentry",
+  "version": "0.1.0",
+  "description": "Tee Sentry events (errors + transactions) to Kubit as OTLP for behavior analytics.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "sentry",
+    "opentelemetry",
+    "otel",
+    "kubit",
+    "observability",
+    "behavior-analytics",
+    "tracing"
+  ],
+  "author": {
+    "name": "Kubit Inc",
+    "url": "https://www.kubit.ai"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://www.kubit.ai",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:browser": "node scripts/build-browser.mjs",
+    "build:all": "npm run build && npm run build:browser",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "npm run build && node scripts/smoke.js",
+    "prepublishOnly": "npm test && npm run build:all"
+  },
+  "peerDependencies": {
+    "@sentry/core": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@sentry/browser": "^10.57.0",
+    "@sentry/core": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  }
+}
