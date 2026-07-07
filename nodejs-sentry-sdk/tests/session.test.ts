@@ -125,6 +125,43 @@ describe("createRollingSession — persistence", () => {
     expect(b()).toBe("gen-1");
   });
 
+  it("converges tabs after expiry — adopts the id another tab already minted", () => {
+    const h = harness();
+    const storage = memoryStorage();
+
+    // Two providers over the same storage = two open tabs.
+    const tabA = createRollingSession({ now: h.now, generateId: h.generateId, storage });
+    const tabB = createRollingSession({ now: h.now, generateId: h.generateId, storage });
+    expect(tabA()).toBe("gen-1");
+    expect(tabB()).toBe("gen-1"); // both tabs share the live session
+
+    // Window elapses; tab A rolls first and persists the successor id. Tab B's
+    // in-memory mirror is now stale — it must re-read storage and adopt A's id
+    // instead of minting its own (the pre-fix divergence).
+    h.advance(THIRTY_MIN);
+    expect(tabA()).toBe("gen-2");
+    expect(tabB()).toBe("gen-2");
+  });
+
+  it("does NOT re-seed a returning visitor whose storage was cleared mid-page", () => {
+    const h = harness();
+    const storage = memoryStorage();
+    const session = createRollingSession({
+      now: h.now,
+      generateId: h.generateId,
+      storage,
+      initialId: "seed",
+    });
+
+    expect(session()).toBe("seed");
+    h.advance(THIRTY_MIN);
+    // Storage wiped externally (e.g. site-data clear) but the page had a prior
+    // session in memory — the seed is first-session-only, so a generated id
+    // must be minted, not the seed replayed.
+    storage.setItem("kubit-session", "");
+    expect(session()).toBe("gen-1");
+  });
+
   it("treats malformed stored JSON as no session", () => {
     const h = harness();
     const storage: SessionStorageLike = {

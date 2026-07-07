@@ -24,6 +24,7 @@
  */
 
 export { kubitSentryIntegration } from "./integration";
+export { SDK_VERSION } from "./version";
 export {
   resolveConfig,
   DEFAULT_ENDPOINT,

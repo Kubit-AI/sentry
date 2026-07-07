@@ -110,14 +110,14 @@ export const createRollingSession = (
   const storage =
     options.storage === undefined ? getDefaultStorage() : options.storage;
 
-  // In-memory mirror — authoritative within a page, backed by `storage` across
-  // reloads / navigations.
+  // In-memory mirror — authoritative within a page WHILE LIVE, backed by
+  // `storage` across reloads / navigations. Once the mirror expires the
+  // provider re-reads storage before minting: another tab sharing the same
+  // storage may have already rolled the window and persisted the successor
+  // id, and trusting the stale mirror would split the session across tabs.
   let memory: StoredSession | null = null;
 
-  const read = (): StoredSession | null => {
-    if (memory) {
-      return memory;
-    }
+  const readStorage = (): StoredSession | null => {
     if (!storage) {
       return null;
     }
@@ -154,15 +154,24 @@ export const createRollingSession = (
 
   return (): string => {
     const t = now();
-    const saved = read();
+    // Fast path: the in-memory mirror is still inside its window.
+    if (isLive(memory, t, windowMs)) {
+      return memory.id;
+    }
+    // Mirror absent or expired — consult storage. Another tab may have rolled
+    // the window already; adopting its id keeps the session converged across
+    // tabs instead of each tab minting its own on expiry.
+    const hadPriorSession = memory !== null;
+    const saved = readStorage();
     if (isLive(saved, t, windowMs)) {
       memory = saved;
       return saved.id;
     }
-    // Mint a new session. A fresh visitor (no prior session at all) may be
-    // seeded with `initialId`; every later window uses `generateId`.
+    // Mint a new session. A fresh visitor (no prior session at all, neither
+    // in memory nor in storage) may be seeded with `initialId`; every later
+    // window uses `generateId`.
     const seeded =
-      saved === null && options.initialId !== undefined
+      !hadPriorSession && saved === null && options.initialId !== undefined
         ? resolveSeed(options.initialId)
         : "";
     const id = seeded.length > 0 ? seeded : generateId();
