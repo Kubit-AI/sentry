@@ -1,6 +1,6 @@
 # Manual release for python-sdk → PyPI (kubit-otel)
-# Parity: when releasing a stable version, dispatch release-nodejs.yml with the same version.
-name: Release python-sdk
+# Parity: when releasing a stable version, dispatch release-otel-nodejs.yml with the same version.
+name: Release otel python-sdk
 
 on:
   workflow_dispatch:
@@ -29,7 +29,7 @@ on:
         default: false
 
 concurrency:
-  group: release-python
+  group: release-otel-python
   cancel-in-progress: false
 
 permissions:

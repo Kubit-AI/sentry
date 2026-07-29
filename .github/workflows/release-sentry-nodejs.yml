@@ -1,12 +1,16 @@
-# Manual release for nodejs-sdk → npm (@kubit-ai/otel)
-# Parity: when releasing a stable version, dispatch release-python.yml with the same version.
-name: Release nodejs-sdk
+# Manual release for nodejs-sentry-sdk → npm (@kubit-ai/sentry)
+#
+# Publishes via npm trusted publishing (OIDC) — there is no NPM_TOKEN. The trust
+# relationship is configured on npmjs.com under the package's Trusted Publisher
+# settings and must name THIS file (release-sentry-nodejs.yml) exactly. Renaming this
+# file breaks publishing until the npm side is updated to match.
+name: Release sentry nodejs-sdk
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number, X.Y.Z only (e.g. 0.8.0). Do not include rc suffix.'
+        description: 'Version number, X.Y.Z only (e.g. 0.4.0). Do not include rc suffix.'
         required: true
         type: string
       release_type:
@@ -29,11 +33,12 @@ on:
         default: false
 
 concurrency:
-  group: release-nodejs
+  group: release-sentry-nodejs
   cancel-in-progress: false
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   # Force any Node-20-based JS actions (e.g. upload-artifact@v5) onto Node 24
@@ -42,7 +47,7 @@ env:
 
 defaults:
   run:
-    working-directory: nodejs-sdk
+    working-directory: nodejs-sentry-sdk
 
 jobs:
   release:
@@ -61,6 +66,15 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1; the npm bundled with Node 24 may
+      # be older depending on the runner image.
+      - name: Ensure npm supports trusted publishing
+        working-directory: .
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+          npm --version
 
       - name: Resolve and validate version, pick npm dist-tag
         id: validate
@@ -87,15 +101,18 @@ jobs:
             DIST_TAG=latest
           fi
 
-          CUR_VERSION=$(node -p "require('./nodejs-sdk/package.json').version")
-          echo "Current version in package.json: $CUR_VERSION"
-          echo "Proposed version:                $FULL_VERSION (release_type=$RELEASE_TYPE, dist-tag=$DIST_TAG)"
+          # Validate against what is actually published on npm, not against the
+          # working tree: releases of this package have historically been cut by
+          # hand, so package.json can lag the registry.
+          PUBLISHED=$(npm view @kubit-ai/sentry version 2>/dev/null || echo "0.0.0")
+          echo "Latest published on npm: $PUBLISHED"
+          echo "Proposed version:        $FULL_VERSION (release_type=$RELEASE_TYPE, dist-tag=$DIST_TAG)"
 
-          if ! npx --yes semver --include-prerelease -r ">$CUR_VERSION" "$FULL_VERSION" >/dev/null 2>&1; then
-            echo "Refusing to release: proposed $FULL_VERSION is not greater than current $CUR_VERSION."
+          if ! npx --yes semver --include-prerelease -r ">$PUBLISHED" "$FULL_VERSION" >/dev/null 2>&1; then
+            echo "Refusing to release: proposed $FULL_VERSION is not greater than published $PUBLISHED."
             exit 1
           fi
-          echo "OK: $FULL_VERSION > $CUR_VERSION"
+          echo "OK: $FULL_VERSION > $PUBLISHED"
 
           echo "version=$FULL_VERSION" >> "$GITHUB_OUTPUT"
           echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
@@ -105,7 +122,7 @@ jobs:
         env:
           VERSION: ${{ steps.validate.outputs.version }}
         run: |
-          TAG="nodejs-sdk-v$VERSION"
+          TAG="sentry-v$VERSION"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists."
             exit 1
@@ -124,7 +141,7 @@ jobs:
         run: npm test
 
       - name: Build
-        run: npm run build
+        run: npm run build:all
 
       - name: npm publish dry-run (validation)
         run: npm publish --access public --tag "${{ steps.validate.outputs.dist_tag }}" --dry-run
@@ -135,16 +152,16 @@ jobs:
       - name: Upload build artifacts to run
         uses: actions/upload-artifact@v5
         with:
-          name: nodejs-sdk-dist-${{ steps.validate.outputs.version }}
+          name: sentry-sdk-dist-${{ steps.validate.outputs.version }}
           path: |
-            nodejs-sdk/*.tgz
-            nodejs-sdk/dist/**
+            nodejs-sentry-sdk/*.tgz
+            nodejs-sentry-sdk/dist/**
           if-no-files-found: error
 
-      - name: Publish to npm
+      # No NODE_AUTH_TOKEN: authentication is via the OIDC trust configured on
+      # npmjs.com. Provenance is generated automatically for this public repo.
+      - name: Publish to npm (trusted publishing / OIDC)
         if: ${{ inputs.dry_run == false }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --tag "${{ steps.validate.outputs.dist_tag }}"
 
       - name: Commit, tag, and push
@@ -153,17 +170,11 @@ jobs:
         env:
           VERSION: ${{ steps.validate.outputs.version }}
         run: |
+          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add nodejs-sdk/package.json nodejs-sdk/package-lock.json
-          git commit -m "Release nodejs-sdk v$VERSION"
-          git tag "nodejs-sdk-v$VERSION"
+          git add nodejs-sentry-sdk/package.json nodejs-sentry-sdk/package-lock.json
+          git commit -m "Release sentry-sdk v$VERSION"
+          git tag "sentry-v$VERSION"
           git push origin HEAD:master
-          git push origin "nodejs-sdk-v$VERSION"
-
-      - name: Dry-run summary
-        if: ${{ inputs.dry_run == true }}
-        run: |
-          echo "Dry run complete. Would have published @kubit-ai/otel ${{ steps.validate.outputs.version }}"
-          echo "to npm with dist-tag '${{ steps.validate.outputs.dist_tag }}'"
-          echo "and tagged nodejs-sdk-v${{ steps.validate.outputs.version }}. No external side-effects performed."
+          git push origin "sentry-v$VERSION"
