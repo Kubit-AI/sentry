@@ -1,5 +1,5 @@
 # Manual release for nodejs-sdk → npm (@kubit-ai/otel)
-# Parity: when releasing a stable version, dispatch release-python.yml with the same version.
+# Parity: when releasing a stable version, dispatch release-otel-python.yml with the same version.
 name: Release nodejs-sdk
 
 on:
