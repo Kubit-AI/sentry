@@ -1,4 +1,9 @@
 # Manual release for nodejs-sdk → npm (@kubit-ai/otel)
+#
+# Publishes via npm trusted publishing (OIDC) — there is no NPM_TOKEN. The trust
+# relationship is configured on npmjs.com under the package's Trusted Publisher
+# settings and must name THIS file (release-otel-nodejs.yml) exactly. Renaming this
+# file breaks publishing until the npm side is updated to match.
 # Parity: when releasing a stable version, dispatch release-otel-python.yml with the same version.
 name: Release otel nodejs-sdk
 
@@ -34,6 +39,7 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   # Force any Node-20-based JS actions (e.g. upload-artifact@v5) onto Node 24
@@ -61,6 +67,15 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1; the npm bundled with Node 24 may
+      # be older depending on the runner image.
+      - name: Ensure npm supports trusted publishing
+        working-directory: .
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+          npm --version
 
       - name: Resolve and validate version, pick npm dist-tag
         id: validate
@@ -141,10 +156,10 @@ jobs:
             nodejs-sdk/dist/**
           if-no-files-found: error
 
-      - name: Publish to npm
+      # No NODE_AUTH_TOKEN: authentication is via the OIDC trust configured on
+      # npmjs.com. Provenance is generated automatically for this public repo.
+      - name: Publish to npm (trusted publishing / OIDC)
         if: ${{ inputs.dry_run == false }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --tag "${{ steps.validate.outputs.dist_tag }}"
 
       - name: Commit, tag, and push
