@@ -22,7 +22,7 @@
     "name": "Kubit Inc",
     "url": "https://www.kubit.ai"
   },
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "homepage": "https://www.kubit.ai",
   "publishConfig": {
     "access": "public"

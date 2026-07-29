@@ -133,4 +133,4 @@ Python 3.9+
 
 ## License
 
-Proprietary — see [LICENSE](./LICENSE).
+MIT — see [LICENSE](./LICENSE).

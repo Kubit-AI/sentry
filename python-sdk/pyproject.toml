@@ -8,7 +8,7 @@ version = "0.7.3"
 description = "OpenTelemetry exporter for Kubit analytics."
 readme = "README.md"
 requires-python = ">=3.9"
-license = "LicenseRef-Kubit-Proprietary"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [
     { name = "Kubit Inc", email = "support@kubit.ai" },
