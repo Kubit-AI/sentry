@@ -24,6 +24,11 @@
   },
   "license": "MIT",
   "homepage": "https://www.kubit.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kubit-AI/sentry.git",
+    "directory": "nodejs-sentry-sdk"
+  },
   "publishConfig": {
     "access": "public"
   },
