@@ -2,6 +2,11 @@
 
 OpenTelemetry SDKs for Kubit analytics. Available for Python and Node.js.
 
+> **Also in this repo:** [`@kubit-ai/sentry`](nodejs-sentry-sdk/README.md)
+> ([npm](https://www.npmjs.com/package/@kubit-ai/sentry)) — tees the error and
+> transaction events your app already sends to Sentry into Kubit as OTLP. See
+> its README for install and usage.
+
 ---
 
 ## Python SDK

@@ -29,6 +29,9 @@
     "url": "git+https://github.com/Kubit-AI/sentry.git",
     "directory": "nodejs-sentry-sdk"
   },
+  "bugs": {
+    "url": "https://github.com/Kubit-AI/sentry/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
