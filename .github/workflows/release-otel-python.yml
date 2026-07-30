@@ -1,4 +1,9 @@
 # Manual release for python-sdk → PyPI (kubit-otel)
+#
+# Publishes via PyPI trusted publishing (OIDC) — there is no PYPI_API_TOKEN. The
+# trust relationship is configured on pypi.org under the project's Publishing
+# settings and must name THIS file (release-otel-python.yml) exactly. Renaming
+# this file breaks publishing until the PyPI side is updated to match.
 # Parity: when releasing a stable version, dispatch release-otel-nodejs.yml with the same version.
 name: Release otel python-sdk
 
@@ -34,6 +39,7 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   # Force any Node-20-based JS actions (e.g. upload-artifact@v5) onto Node 24
@@ -140,12 +146,15 @@ jobs:
           path: python-sdk/dist/*
           if-no-files-found: error
 
-      - name: Publish to PyPI
+      # No PYPI_API_TOKEN: authentication is via the OIDC trust configured on
+      # pypi.org under the project's Publishing settings, which must name THIS
+      # file (release-otel-python.yml). The action exchanges the GitHub OIDC
+      # token for a short-lived PyPI token; twine is not used for upload.
+      - name: Publish to PyPI (trusted publishing / OIDC)
         if: ${{ inputs.dry_run == false }}
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload --non-interactive dist/*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python-sdk/dist
 
       - name: Commit, tag, and push
         if: ${{ inputs.dry_run == false }}
