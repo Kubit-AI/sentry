@@ -8,4 +8,4 @@
  * `package.json` — `prepublishOnly` runs the tests, so a release with a
  * drifted version cannot reach npm.
  */
-export const SDK_VERSION = "0.3.2";
+export const SDK_VERSION = "0.3.3";

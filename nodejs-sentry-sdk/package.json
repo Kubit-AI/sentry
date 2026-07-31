@@ -1,6 +1,6 @@
 {
   "name": "@kubit-ai/sentry",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Tee Sentry events (errors + transactions) to Kubit as OTLP for behavior analytics.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
