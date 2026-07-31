@@ -1,5 +1,9 @@
 # @kubit-ai/sentry
 
+[![npm](https://img.shields.io/npm/v/%40kubit-ai%2Fsentry)](https://www.npmjs.com/package/@kubit-ai/sentry)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Kubit-AI/sentry/blob/master/LICENSE)
+[![Source](https://img.shields.io/badge/GitHub-Kubit--AI%2Fsentry-181717?logo=github)](https://github.com/Kubit-AI/sentry/tree/master/nodejs-sentry-sdk)
+
 Tee your existing Sentry telemetry into Kubit. The SDK observes the **error**
 and **transaction** events your app already sends to Sentry, translates them to
 OTLP/HTTP+JSON, and POSTs a copy to the Kubit collector with an `x-api-key`
