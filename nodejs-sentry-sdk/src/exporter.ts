@@ -30,6 +30,17 @@ const FETCH_TIMEOUT_MS = 10_000;
  */
 const KEEPALIVE_MAX_BODY_BYTES = 60_000;
 
+/**
+ * UTF-8 byte length of the serialized body. The keepalive cap is a BYTE
+ * budget: counting `string.length` (UTF-16 code units) undercounts non-ASCII
+ * payloads up to 3x, letting an over-cap request through — the browser then
+ * rejects the fetch outright and the event is lost.
+ */
+const byteLength = (body: string): number =>
+  typeof TextEncoder !== "undefined"
+    ? new TextEncoder().encode(body).byteLength
+    : body.length;
+
 export interface PostResult {
   ok: boolean;
   /** HTTP status, or 0 on network failure. */
@@ -73,7 +84,7 @@ export const postOtlp = async (
     ) {
       init.signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
     }
-    if (typeof document !== "undefined" && body.length < KEEPALIVE_MAX_BODY_BYTES) {
+    if (typeof document !== "undefined" && byteLength(body) < KEEPALIVE_MAX_BODY_BYTES) {
       // Lets events fired near page unload survive navigation.
       init.keepalive = true;
     }

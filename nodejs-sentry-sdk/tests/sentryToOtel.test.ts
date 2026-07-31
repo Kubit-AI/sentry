@@ -48,7 +48,7 @@ describe("Transactions", () => {
     expect(attrs["service.version"]).toEqual({ stringValue: "1.2.3" });
   });
 
-  it("stamps session.id + user identity (from event.user) onto every span", () => {
+  it("stamps session.id + user.id onto every span — and ONLY the id, never name/email (PII)", () => {
     const event = {
       type: "transaction",
       transaction: "t",
@@ -80,11 +80,11 @@ describe("Transactions", () => {
     for (const i of [0, 1]) {
       // user id coerced to string; present on root AND child spans
       expect(spanAttrs(i)["user.id"]).toEqual({ stringValue: "42" });
-      expect(spanAttrs(i)["user.name"]).toEqual({ stringValue: "alice" });
-      expect(spanAttrs(i)["user.email"]).toEqual({
-        stringValue: "alice@example.com",
-      });
       expect(spanAttrs(i)["session.id"]).toEqual({ stringValue: "sess-xyz" });
+      // name/email are PII — user details are looked up backend-side by id,
+      // so they must never be exported even when Sentry.setUser set them.
+      expect(spanAttrs(i)["user.name"]).toBeUndefined();
+      expect(spanAttrs(i)["user.email"]).toBeUndefined();
     }
   });
 

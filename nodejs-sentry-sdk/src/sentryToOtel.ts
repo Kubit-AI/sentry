@@ -21,9 +21,10 @@ import type {
   OtlpSpanEvent,
 } from "./types";
 import type { KubitSentryConfig } from "./config";
+import { SDK_VERSION } from "./version";
 
 const SCOPE_NAME = "kubit.sentry";
-const SCOPE_VERSION = "0.1.0";
+const SCOPE_VERSION = SDK_VERSION;
 const SPAN_KIND_INTERNAL = 1;
 
 // OTel Status enum
@@ -197,14 +198,15 @@ const userIdToString = (id: unknown): string | undefined => {
 
 /**
  * Event-scoped attributes stamped onto every span: the injected `session.id`
- * plus the Sentry user identity (`Sentry.setUser`). `user.id` is the join key
- * for per-user behavior analytics — without it, events can't be grouped by user.
+ * plus `user.id` from the Sentry user identity (`Sentry.setUser`). `user.id`
+ * is the join key for per-user behavior analytics — without it, events can't
+ * be grouped by user. It is deliberately the ONLY user field exported:
+ * `user.username` / `user.email` are direct PII, and any user details are
+ * looked up backend-side by id instead of riding every span.
  */
 const eventScopedAttrs = (event: Event, sessionId?: string): OtlpKeyValue[] => [
   ...strAttr("session.id", sessionId),
   ...strAttr("user.id", userIdToString(event.user?.id)),
-  ...strAttr("user.name", event.user?.username),
-  ...strAttr("user.email", event.user?.email),
 ];
 
 /**
