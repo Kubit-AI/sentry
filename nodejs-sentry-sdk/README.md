@@ -126,6 +126,14 @@ span attributes — anything you don't want exported should be scrubbed in your
 Sentry pipeline (the integration runs after your `beforeSend`, so your existing
 scrubbing applies).
 
+**Identity attributes.** Every exported span is stamped with `session.id` (when
+a session id is configured — the browser bundle enables a rolling session by
+default) and `user.id` when your app called `Sentry.setUser({ id })`. `user.id`
+is the only user field exported: the user's name and email set via
+`Sentry.setUser` are **never** sent to Kubit — user details are resolved
+backend-side from the id. If your ids are themselves sensitive, hash them
+before passing to `Sentry.setUser`.
+
 ## Limitations
 
 - Export is one fire-and-forget POST per event — no batching, sampling, or

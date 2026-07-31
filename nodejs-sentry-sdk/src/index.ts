@@ -24,6 +24,7 @@
  */
 
 export { kubitSentryIntegration } from "./integration";
+export { SDK_VERSION } from "./version";
 export {
   resolveConfig,
   DEFAULT_ENDPOINT,
@@ -36,6 +37,32 @@ export {
   type SessionIdProvider,
   type SessionStorageLike,
 } from "./session";
+// Cookie-backed visitor identity shared across Kubit web surfaces: mint-once
+// anonymous id (optionally fingerprint-seeded) + explicit-start 30-min
+// hard-clock session. `getSessionId`/`getAnonymousId` are the read surface
+// for consumers that attach the ids to their own transport (e.g. request
+// headers); `getIdentityAttributes` returns them under the canonical
+// `session.id` / `user.anonymous_id` attribute names.
+export {
+  getAnonymousId,
+  hasEstablishedAnonymousId,
+  upgradeAnonymousId,
+  seedAnonymousId,
+  startSession,
+  startSessionFromToken,
+  getSessionId,
+  clearSession,
+  getIdentityAttributes,
+  getRegistrableCookieDomain,
+} from "./identity";
+// Client-context attributes (browser/os/locale/timezone + async geo) under
+// OTel semconv keys — the SDK owns this naming so every emitter lands on the
+// same attribute keys.
+export {
+  getClientContextAttributes,
+  initGeoContext,
+  type GeoContextOptions,
+} from "./clientContext";
 export {
   sentryEventToOtlp,
   sentryTransactionToOtlp,
